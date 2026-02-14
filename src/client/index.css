@@ -31,6 +31,25 @@ body {
   backdrop-filter: blur(20px);
 }
 
+@keyframes highlight {
+  0% {
+    background-color: transparent;
+  }
+
+  20% {
+    background-color: rgba(0, 122, 255, 0.2);
+  }
+
+  100% {
+    background-color: transparent;
+  }
+}
+
+.highlight-msg {
+  animation: highlight 2s ease-out;
+  border-radius: 12px;
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

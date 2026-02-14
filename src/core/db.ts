@@ -2,6 +2,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import Database from 'better-sqlite3'
 import { GroupMemberInfo, MessageType, UnifiedGroup, UnifiedMessage, UnifiedUser } from './types'
+import { eventBus, Events } from './bus'
 
 // SQLite init --------------------------------------------------------------
 const dataDir = join(process.cwd(), '.data')
@@ -27,6 +28,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS groups (
     groupId INTEGER PRIMARY KEY NOT NULL,
     groupName TEXT DEFAULT '',
+    avatarUrl TEXT DEFAULT '',
     ownerId INTEGER DEFAULT 0,
     adminList TEXT DEFAULT '[]',
     memberList TEXT DEFAULT '[]',
@@ -35,7 +37,6 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS private_messages (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
-    peerId TEXT NOT NULL,
     senderId INTEGER NOT NULL,
     receiverId INTEGER NOT NULL,
     timestamp INTEGER NOT NULL,
@@ -52,8 +53,17 @@ db.exec(`
     isRevoked INTEGER DEFAULT 0
   );
 
-  CREATE INDEX IF NOT EXISTS idx_private_peer ON private_messages(peerId);
+  CREATE INDEX IF NOT EXISTS idx_private_sender ON private_messages(senderId);
+  CREATE INDEX IF NOT EXISTS idx_private_receiver ON private_messages(receiverId);
   CREATE INDEX IF NOT EXISTS idx_group_id ON group_messages(groupId);
+
+  CREATE TABLE IF NOT EXISTS read_state (
+    userId INTEGER NOT NULL,
+    scene TEXT NOT NULL,
+    targetId INTEGER NOT NULL,
+    lastReadSeq INTEGER DEFAULT 0,
+    PRIMARY KEY (userId, scene, targetId)
+  );
 `)
 
 const parseJSON = <T> (value: string | null, fallback: T): T => {
@@ -81,6 +91,7 @@ type UserRow = {
 type GroupRow = {
   groupId: number
   groupName: string
+  avatarUrl: string
   ownerId: number
   adminList: string
   memberList: string
@@ -150,9 +161,7 @@ export const dbService = {
     db.transaction(() => {
       db.prepare('DELETE FROM users WHERE userId = ?').run(userId)
       if (clearMessages) {
-        const peerLikeA = `${userId}:%`
-        const peerLikeB = `%:${userId}`
-        db.prepare('DELETE FROM private_messages WHERE peerId LIKE ? OR peerId LIKE ?').run(peerLikeA, peerLikeB)
+        db.prepare('DELETE FROM private_messages WHERE senderId = ? OR receiverId = ?').run(userId, userId)
         db.prepare('DELETE FROM group_messages WHERE senderId = ?').run(userId)
       }
     })()
@@ -193,22 +202,27 @@ export const dbService = {
   },
 
   saveGroup: (group: Partial<UnifiedGroup> & { groupId: number }) => {
+    // 首先获取现有数据以防覆盖
+    const existing = dbService.getGroupInfo(group.groupId) as UnifiedGroup | undefined
+
     db.prepare(`
-      INSERT INTO groups (groupId, groupName, ownerId, adminList, memberList, muteList)
-      VALUES (:groupId, :groupName, :ownerId, :adminList, :memberList, :muteList)
+      INSERT INTO groups (groupId, groupName, avatarUrl, ownerId, adminList, memberList, muteList)
+      VALUES (:groupId, :groupName, :avatarUrl, :ownerId, :adminList, :memberList, :muteList)
       ON CONFLICT(groupId) DO UPDATE SET
         groupName = excluded.groupName,
+        avatarUrl = excluded.avatarUrl,
         ownerId = excluded.ownerId,
         adminList = excluded.adminList,
         memberList = excluded.memberList,
         muteList = excluded.muteList;
     `).run({
       groupId: group.groupId,
-      groupName: group.groupName ?? '',
-      ownerId: group.ownerId ?? 0,
-      adminList: JSON.stringify(group.adminList ?? []),
-      memberList: JSON.stringify(group.memberList ?? []),
-      muteList: JSON.stringify(group.muteList ?? [])
+      groupName: group.groupName ?? existing?.groupName ?? '',
+      avatarUrl: group.avatarUrl ?? existing?.avatarUrl ?? '',
+      ownerId: group.ownerId ?? existing?.ownerId ?? 0,
+      adminList: JSON.stringify(group.adminList ?? existing?.adminList ?? []),
+      memberList: JSON.stringify(group.memberList ?? existing?.memberList ?? []),
+      muteList: JSON.stringify(group.muteList ?? existing?.muteList ?? [])
     })
   },
 
@@ -258,19 +272,62 @@ export const dbService = {
     }
   },
 
+  updateGroupMemberRole: (groupId: number, userId: number, role: 'owner' | 'admin' | 'member') => {
+    const group = dbService.getGroupInfo(groupId) as UnifiedGroup | undefined
+    if (!group) return
+    const nextList = group.memberList.map(m =>
+      m.userId === userId ? { ...m, role } : m
+    )
+    const nextAdminList = role === 'admin'
+      ? Array.from(new Set([...group.adminList, userId]))
+      : group.adminList.filter(id => id !== userId)
+
+    db.prepare('UPDATE groups SET memberList = ?, adminList = ? WHERE groupId = ?').run(
+      JSON.stringify(nextList),
+      JSON.stringify(nextAdminList),
+      groupId
+    )
+  },
+
+  updateGroupMemberInfo: (groupId: number, userId: number, data: Partial<GroupMemberInfo>) => {
+    const group = dbService.getGroupInfo(groupId) as UnifiedGroup | undefined
+    if (!group) return
+    const nextList = group.memberList.map(m =>
+      m.userId === userId ? { ...m, ...data } : m
+    )
+    db.prepare('UPDATE groups SET memberList = ? WHERE groupId = ?').run(JSON.stringify(nextList), groupId)
+  },
+
+  transferGroupOwner: (groupId: number, newOwnerId: number) => {
+    const group = dbService.getGroupInfo(groupId) as UnifiedGroup | undefined
+    if (!group) return
+    const oldOwnerId = group.ownerId
+    const nextList = group.memberList.map(m => {
+      if (m.userId === oldOwnerId) return { ...m, role: 'member' } as GroupMemberInfo
+      if (m.userId === newOwnerId) return { ...m, role: 'owner' } as GroupMemberInfo
+      return m
+    })
+    const nextAdminList = group.adminList.filter(id => id !== newOwnerId)
+
+    db.prepare('UPDATE groups SET ownerId = ?, memberList = ?, adminList = ? WHERE groupId = ?').run(
+      newOwnerId,
+      JSON.stringify(nextList),
+      JSON.stringify(nextAdminList),
+      groupId
+    )
+  },
+
   // -------------------- Message --------------------
   saveMsg: (msg: Omit<UnifiedMessage, 'seq'>): UnifiedMessage => {
     const payload = { ...msg, isRevoked: msg.isRevoked ?? 0 }
 
     if (payload.type === 'private') {
-      const ids = [payload.senderId, payload.targetId].sort((a, b) => a - b)
-      const peerId = `${ids[0]}:${ids[1]}`
       const res = db.prepare(`
-        INSERT INTO private_messages (peerId, senderId, receiverId, timestamp, content, isRevoked)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(peerId, payload.senderId, payload.targetId, payload.timestamp, serializeContent(payload.content), payload.isRevoked)
+        INSERT INTO private_messages (senderId, receiverId, timestamp, content, isRevoked)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(payload.senderId, payload.targetId, payload.timestamp, serializeContent(payload.content), payload.isRevoked)
 
-      return { ...payload, seq: res.lastInsertRowid as number, peerId }
+      return { ...payload, seq: res.lastInsertRowid as number }
     }
 
     const res = db.prepare(`
@@ -284,16 +341,17 @@ export const dbService = {
   getMsg: ({ type, targetId, selfId, limit = 50 }: { type: 'private' | 'group'; targetId: number; selfId?: number; limit?: number }): UnifiedMessage[] => {
     if (type === 'private') {
       if (!selfId) return []
-      const ids = [selfId, targetId].sort((a, b) => a - b)
-      const peerId = `${ids[0]}:${ids[1]}`
-      const rows = db.prepare('SELECT * FROM private_messages WHERE peerId = ? ORDER BY seq DESC LIMIT ?').all(peerId, limit) as any[]
+      const rows = db.prepare(`
+        SELECT * FROM private_messages 
+        WHERE (senderId = ? AND receiverId = ?) OR (senderId = ? AND receiverId = ?)
+        ORDER BY seq DESC LIMIT ?
+      `).all(selfId, targetId, targetId, selfId, limit) as any[]
 
       return rows.reverse().map((row: any) => ({
         seq: row.seq,
         type: 'private',
         senderId: row.senderId,
-        targetId,
-        peerId: row.peerId,
+        targetId: row.senderId === selfId ? row.receiverId : row.senderId,
         content: (() => {
           const parsed = parseJSON<any>(row.content, row.content)
           if (Array.isArray(parsed)) return parsed as MessageType
@@ -324,11 +382,26 @@ export const dbService = {
   recallMsg: (type: 'private' | 'group', seq: number) => {
     const table = type === 'private' ? 'private_messages' : 'group_messages'
     db.prepare(`UPDATE ${table} SET isRevoked = 1 WHERE seq = ?`).run(seq)
+    // 这里的 type 修正为具体的类型和 seq
+    eventBus.emit(Events.MESSAGE_RECALLED, { type, seq })
   },
 
   clearPrivateConversation: (userAId: number, userBId: number) => {
-    const ids = [userAId, userBId].sort((a, b) => a - b)
-    const peerId = `${ids[0]}:${ids[1]}`
-    db.prepare('DELETE FROM private_messages WHERE peerId = ?').run(peerId)
+    db.prepare('DELETE FROM private_messages WHERE (senderId = ? AND receiverId = ?) OR (senderId = ? AND receiverId = ?)')
+      .run(userAId, userBId, userBId, userAId)
+  },
+
+  // -------------------- Read State --------------------
+  getReadState: (userId: number, scene: 'private' | 'group', targetId: number): number => {
+    const row = db.prepare('SELECT lastReadSeq FROM read_state WHERE userId = ? AND scene = ? AND targetId = ?').get(userId, scene, targetId) as any
+    return row ? row.lastReadSeq : 0
+  },
+
+  updateReadState: (userId: number, scene: 'private' | 'group', targetId: number, seq: number) => {
+    db.prepare(`
+      INSERT INTO read_state (userId, scene, targetId, lastReadSeq)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(userId, scene, targetId) DO UPDATE SET lastReadSeq = MAX(lastReadSeq, excluded.lastReadSeq)
+    `).run(userId, scene, targetId, seq)
   }
 }

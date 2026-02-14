@@ -6,7 +6,7 @@
   "main": "index.js",
   "scripts": {
     "dev:server": "tsup src/index.ts --watch --onSuccess \"node lib/index.js\"",
-    "dev:client": "vite",
+    "dev:client": "vite --host 0.0.0.0",
     "dev": "concurrently -n \"Server,Client\" -c \"blue,green\" \"npm:dev:server\" \"npm:dev:client\"",
     "build:client": "vite build",
     "build:server": "tsup src/index.ts",
@@ -40,6 +40,7 @@
     "better-sqlite3": "^12.6.2",
     "clsx": "^2.1.1",
     "express": "^5.2.1",
+    "framer-motion": "^12.34.0",
     "lucide-react": "^0.563.0",
     "multer": "^2.0.2",
     "react": "^19.2.4",

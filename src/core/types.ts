@@ -60,7 +60,6 @@ export interface UnifiedMessage {
   senderId: number
   targetId: number // Original target (userId or groupId)
   groupId?: number // For group messages
-  peerId?: string  // For private messages: 'minUserId:maxUserId'
   content: MessageType
   timestamp: number
   isRevoked: 0 | 1
@@ -96,6 +95,7 @@ export interface MuteItem {
 export interface UnifiedGroup {
   groupId: number
   groupName: string
+  avatarUrl?: string
   ownerId: number
   adminList: number[]
   memberList: GroupMemberInfo[]

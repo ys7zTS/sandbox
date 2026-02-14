@@ -5,6 +5,7 @@ class WebSocketAPI {
   private url: string
   private echoMap = new Map<string, { resolve: Function, reject: Function }>()
   private handlers = new Map<string, Set<Function>>()
+  private onConnectHandlers = new Set<() => void>()
   private heartbeatInterval: any
   private lastMessageTime: number = 0
   private connectPromise: Promise<void> | null = null
@@ -19,6 +20,14 @@ class WebSocketAPI {
     this.url = `${protocol}//${host}`
   }
 
+  onConnect (handler: () => void) {
+    this.onConnectHandlers.add(handler)
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      handler()
+    }
+    return () => this.onConnectHandlers.delete(handler)
+  }
+
   connect (): Promise<void> {
     if (this.connectPromise) return this.connectPromise
 
@@ -30,6 +39,7 @@ class WebSocketAPI {
         console.log(`[WS] Connected to ${this.url}`)
         this.lastMessageTime = Date.now()
         this.startHeartbeat()
+        this.onConnectHandlers.forEach(h => h())
         resolve()
       }
 
@@ -70,6 +80,7 @@ class WebSocketAPI {
   }
 
   private startHeartbeat () {
+    this.stopHeartbeat() // 确保旧的被清理
     this.heartbeatInterval = setInterval(() => {
       // 检查接收超时
       if (Date.now() - this.lastMessageTime > 30000) {
@@ -77,8 +88,10 @@ class WebSocketAPI {
         this.ws?.close()
         return
       }
+      // 添加心跳发送日志（开发调试用）
+      // console.debug('[WS] Sending heartbeat...')
       this.send(ActionTypes.HEARTBEAT, {}).catch(() => { })
-    }, 5000) // 每 5 秒发送心跳并检查一次
+    }, 5000)
   }
 
   private stopHeartbeat () {
@@ -132,6 +145,9 @@ class WebSocketAPI {
   removeGroup (groupId: number, options: any = {}) { return this.send(ActionTypes.REMOVE_GROUP, { groupId, ...options }) }
   joinGroup (groupId: number, userId: number) { return this.send(ActionTypes.JOIN_GROUP, { groupId, userId }) }
   leaveGroup (groupId: number, userId: number) { return this.send(ActionTypes.LEAVE_GROUP, { groupId, userId }) }
+  setGroupAdmin (groupId: number, userId: number, isAdmin: boolean) { return this.send(ActionTypes.SET_GROUP_ADMIN, { groupId, userId, isAdmin }) }
+  updateGroupMember (groupId: number, userId: number, data: any) { return this.send(ActionTypes.UPDATE_GROUP_MEMBER, { groupId, userId, ...data }) }
+  transferGroupOwner (groupId: number, userId: number) { return this.send(ActionTypes.TRANSFER_GROUP_OWNER, { groupId, userId }) }
 
   getMessages (params: any) { return this.send(ActionTypes.GET_MESSAGES, params) }
   sendMessage (data: any) { return this.send(ActionTypes.SEND_MESSAGE, data) }
