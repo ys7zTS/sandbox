@@ -1,5 +1,5 @@
 import React from 'react'
-import { X, ChevronLeft } from 'lucide-react'
+import { ChevronLeft } from 'lucide-react'
 import { useChat } from '../ChatContext'
 
 const cn = (...classes: (string | boolean | undefined)[]) => classes.filter(Boolean).join(' ')
@@ -31,6 +31,8 @@ export const GroupEditSidebar: React.FC = () => {
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
       className={cn(
         'h-full w-80 flex flex-col border-l shadow-2xl backdrop-blur-3xl overflow-hidden',
         isDark ? 'bg-gray-900/90 border-white/10' : 'bg-[#F9F1F3]/90 border-black/5'
@@ -62,13 +64,11 @@ export const GroupEditSidebar: React.FC = () => {
                   className={cn('w-full bg-transparent border-none outline-none text-sm font-bold focus:ring-0 p-0',
                     isDark ? 'text-white' : 'text-gray-900')}
                   placeholder='输入群名称'
-                />
-              )
+                />)
               : (
                 <div className={cn('text-sm font-bold', isDark ? 'text-gray-200' : 'text-gray-700')}>
                   {detailInfo?.groupName}
-                </div>
-              )}
+                </div>)}
           </div>
         </div>
       </div>

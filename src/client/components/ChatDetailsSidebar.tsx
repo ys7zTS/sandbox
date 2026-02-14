@@ -1,19 +1,19 @@
 import React, { useEffect } from 'react'
-import { X, ChevronRight, Plus, Minus } from 'lucide-react'
+import { ChevronRight, Plus, Minus } from 'lucide-react'
 import { useChat } from '../ChatContext'
 
 const cn = (...classes: (string | boolean | undefined)[]) => classes.filter(Boolean).join(' ')
 
 export const ChatDetailsSidebar: React.FC = () => {
   const {
-    showSettings, setShowSettings,
+    showSettings,
     currentTarget, me,
     detailInfo,
     editInfo, setEditInfo,
     fetchDetail, handleSave,
     handleGroupAction,
     actualTheme, setShowDeleteConfirm,
-    showGroupEdit, setShowGroupEdit
+    setShowGroupEdit
   } = useChat()
 
   const isDark = actualTheme === 'dark'
@@ -42,28 +42,39 @@ export const ChatDetailsSidebar: React.FC = () => {
 
   const handleBlur = () => {
     if ((isMe || isOwner || isMember) && editInfo) {
+      // Ensure age is a valid number if in private chat
+      let sanitizedInfo = { ...editInfo }
+      if (isPrivate) {
+        sanitizedInfo = {
+          ...sanitizedInfo,
+          age: parseInt(String(editInfo.age)) || 0
+        }
+      }
+      setEditInfo(sanitizedInfo)
       handleSave()
     }
   }
 
-  const members = detailInfo?.memberList || []
+  const members = [...(detailInfo?.memberList || [])].sort((a: any, b: any) => {
+    const priority: any = { owner: 1, admin: 2, member: 3 }
+    const aP = priority[a.role] || 4
+    const bP = priority[b.role] || 4
+    return aP - bP
+  })
   const displayMembers = members.slice(0, 13)
 
   return (
     <div
       onMouseDown={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
       className={cn(
         'h-full w-80 flex flex-col border-l shadow-2xl backdrop-blur-3xl overflow-hidden',
         isDark ? 'bg-gray-900/90 border-white/10' : 'bg-[#F9F1F3]/90 border-black/5'
       )}
     >
       <header className='h-14 px-4 flex items-center justify-between shrink-0'>
-        <button
-          onClick={() => setShowSettings(false)}
-          className={cn('p-2 rounded-full transition-colors', isDark ? 'hover:bg-white/10 text-gray-400' : 'hover:bg-black/5 text-gray-500')}
-        >
-          <X className='w-4 h-4' />
-        </button>
+        <div className='w-8' />
         <h3 className={cn('text-sm font-bold', isDark ? 'text-gray-200' : 'text-gray-700')}>
           {isGroup ? '群聊资料' : '用户资料'}
         </h3>
@@ -79,14 +90,103 @@ export const ChatDetailsSidebar: React.FC = () => {
           <div className='flex-1 min-w-0 text-left'>
             <div className='flex items-center gap-2'>
               <h4 className={cn('text-base font-bold truncate', isDark ? 'text-white' : 'text-gray-900')}>
-                {detailInfo?.groupName || currentTarget.name}
+                {isGroup
+                  ? (detailInfo?.groupName || currentTarget.name)
+                  : (detailInfo?.nickname || String(currentTarget.id))}
               </h4>
             </div>
             <div className={cn('text-xs opacity-50 font-medium', isDark ? 'text-gray-100' : 'text-gray-900')}>
-              {displayId}
+              {isPrivate ? `QQ: ${displayId}` : `ID: ${displayId}`}
             </div>
           </div>
         </div>
+
+        {/* Private Chat Profile Info */}
+        {isPrivate && (
+          <div className='space-y-2'>
+            <h5 className='px-4 text-[11px] font-bold text-gray-500 uppercase tracking-widest opacity-70 text-left'>个人资料</h5>
+            <div className={cn('p-4 rounded-2xl shadow-sm space-y-4', isDark ? 'bg-gray-800/50' : 'bg-white')}>
+              <div className='flex flex-col gap-1 text-left'>
+                <span className='text-[10px] font-bold opacity-40 uppercase tracking-wider'>昵称</span>
+                {isMe
+                  ? (
+                    <input
+                      type='text'
+                      value={editInfo?.nickname || ''}
+                      onBlur={handleBlur}
+                      onChange={(e) => setEditInfo({ ...editInfo, nickname: e.target.value })}
+                      className={cn('text-sm font-bold bg-transparent border-b border-transparent focus:border-mac-blue outline-none transition-all',
+                        isDark ? 'text-white' : 'text-gray-900')}
+                      placeholder='输入昵称'
+                    />)
+                  : (
+                    <span className={cn('text-sm font-bold', isDark ? 'text-white' : 'text-gray-900')}>
+                      {detailInfo?.nickname || '未设置'}
+                    </span>)}
+              </div>
+              <div className='flex flex-col gap-1 text-left'>
+                <span className='text-[10px] font-bold opacity-40 uppercase tracking-wider'>QQ号</span>
+                <span className={cn('text-sm font-bold', isDark ? 'text-white' : 'text-gray-900')}>
+                  {displayId}
+                </span>
+              </div>
+              <div className='grid grid-cols-2 gap-4'>
+                <div className='flex flex-col gap-1 text-left'>
+                  <span className='text-[10px] font-bold opacity-40 uppercase tracking-widest px-1'>性别</span>
+                  {isMe
+                    ? (
+                      <div className={cn('flex p-1 rounded-2xl border backdrop-blur-md transition-all mt-1',
+                        isDark ? 'bg-black/20 border-white/10' : 'bg-white/50 border-black/5')}
+                      >
+                        {[
+                          { val: 'male', label: '男' },
+                          { val: 'female', label: '女' },
+                          { val: 'unknown', label: '未知' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.val}
+                            onClick={() => {
+                              const nextInfo = { ...editInfo, gender: opt.val as any }
+                              setEditInfo(nextInfo)
+                              handleSave()
+                            }}
+                            className={cn('flex-1 py-1.5 text-xs font-bold rounded-xl transition-all',
+                              (editInfo?.gender || detailInfo?.gender) === opt.val
+                                ? (isDark ? 'bg-mac-blue text-white shadow-lg shadow-mac-blue/20' : 'bg-mac-blue text-white shadow-md shadow-mac-blue/20')
+                                : (isDark ? 'text-gray-400 hover:text-white hover:bg-white/5' : 'text-gray-500 hover:text-mac-text-main hover:bg-black/5')
+                            )}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>)
+                    : (
+                      <span className={cn('text-sm font-bold px-1', isDark ? 'text-white' : 'text-gray-900')}>
+                        {detailInfo?.gender === 'male' ? '男' : detailInfo?.gender === 'female' ? '女' : '未知'}
+                      </span>)}
+                </div>
+                <div className='flex flex-col gap-1 text-left'>
+                  <span className='text-[10px] font-bold opacity-40 uppercase tracking-wider'>年龄</span>
+                  {isMe
+                    ? (
+                      <input
+                        type='number'
+                        value={editInfo?.age ?? ''}
+                        onBlur={handleBlur}
+                        onChange={(e) => setEditInfo({ ...editInfo, age: e.target.value })}
+                        className={cn('text-sm font-bold bg-transparent border-b border-transparent focus:border-mac-blue outline-none transition-all w-full',
+                          isDark ? 'text-white' : 'text-gray-900')}
+                        placeholder='年龄'
+                      />)
+                    : (
+                      <span className={cn('text-sm font-bold', isDark ? 'text-white' : 'text-gray-900')}>
+                        {detailInfo?.age ?? '未知'} 岁
+                      </span>)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Member Grid Card */}
         {isGroup && (
@@ -154,19 +254,21 @@ export const ChatDetailsSidebar: React.FC = () => {
         )}
 
         {/* Section: Announcement */}
-        <div className='space-y-2'>
-          <h5 className='px-4 text-[11px] font-bold text-gray-500 uppercase tracking-widest opacity-70 text-left'>群公告</h5>
-          <div className={cn('p-4 rounded-2xl shadow-sm text-sm font-bold flex flex-col gap-2 group cursor-pointer transition-all',
-            isDark ? 'bg-gray-800/50 hover:bg-gray-800/80' : 'bg-white hover:shadow-md')}
-          >
-            <div className='flex items-center justify-between'>
-              <div className='flex-1 truncate opacity-70 text-left font-medium leading-relaxed'>
-                {detailInfo?.announcement || '暂无公告'}
+        {isGroup && (
+          <div className='space-y-2'>
+            <h5 className='px-4 text-[11px] font-bold text-gray-500 uppercase tracking-widest opacity-70 text-left'>群公告</h5>
+            <div className={cn('p-4 rounded-2xl shadow-sm text-sm font-bold flex flex-col gap-2 group cursor-pointer transition-all',
+              isDark ? 'bg-gray-800/50 hover:bg-gray-800/80' : 'bg-white hover:shadow-md')}
+            >
+              <div className='flex items-center justify-between'>
+                <div className='flex-1 truncate opacity-70 text-left font-medium leading-relaxed'>
+                  {detailInfo?.announcement || '暂无公告'}
+                </div>
+                <ChevronRight className='w-4 h-4 opacity-30 translate-x-1 group-hover:translate-x-2 transition-transform shrink-0' />
               </div>
-              <ChevronRight className='w-4 h-4 opacity-30 translate-x-1 group-hover:translate-x-2 transition-transform shrink-0' />
             </div>
           </div>
-        </div>
+        )}
 
         {/* Section: My Nickname */}
         {isGroup && isMember && (
@@ -175,9 +277,9 @@ export const ChatDetailsSidebar: React.FC = () => {
               <span className={cn('text-[10px] font-bold opacity-40 uppercase tracking-wider')}>我的本群昵称</span>
               <input
                 type='text'
-                value={editInfo?.nickname || ''}
+                value={editInfo?.card || ''}
                 onBlur={handleBlur}
-                onChange={(e) => setEditInfo({ ...editInfo, nickname: e.target.value })}
+                onChange={(e) => setEditInfo({ ...editInfo, card: e.target.value })}
                 placeholder='未设置'
                 className={cn('text-sm font-bold w-full bg-transparent border-b border-transparent focus:border-mac-blue outline-none transition-all',
                   isDark ? 'text-white' : 'text-gray-900')}
@@ -215,6 +317,15 @@ export const ChatDetailsSidebar: React.FC = () => {
               className='w-full py-3.5 bg-mac-blue text-white rounded-2xl text-sm font-bold transition-all active:scale-95 shadow-lg shadow-mac-blue/20'
             >
               加入群聊
+            </button>
+          )}
+          {isPrivate && !isMe && (
+            <button
+              onClick={() => setShowDeleteConfirm({ type: 'friend', id: currentTarget.id, clearMessages: true })}
+              className={cn('w-full py-3.5 rounded-2xl text-sm font-bold transition-all active:scale-95 shadow-sm',
+                isDark ? 'bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white' : 'bg-red-50 text-red-500 hover:bg-red-500 hover:text-white')}
+            >
+              删除好友
             </button>
           )}
         </div>

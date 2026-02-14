@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react'
 import {
   Smile,
-  Paperclip,
   ImageIcon,
   FolderInput,
   Mic,
-  AtSign
+  AtSign,
+  X
 } from 'lucide-react'
 import { useChat } from '../ChatContext'
 import { MessageType } from '../../types/Message'
@@ -13,7 +13,7 @@ import { MessageType } from '../../types/Message'
 const cn = (...classes: (string | boolean | undefined)[]) => classes.filter(Boolean).join(' ')
 
 export const InputArea: React.FC = () => {
-  const { currentTarget, sendMsg, actualTheme, me, detailInfo } = useChat()
+  const { currentTarget, sendMsg, handleFiles, actualTheme, me, detailInfo, stagedImages, setStagedImages } = useChat()
   const [inputValue, setInputValue] = useState('')
   const [atMenu, setAtMenu] = useState<{ x: number, y: number, filter: string } | null>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -27,8 +27,8 @@ export const InputArea: React.FC = () => {
     me?.groupList?.some((gid: any) => String(gid) === String(currentTarget?.id))
   )
 
-  // 只有在明确已经加载完且确认不是成员时才禁用，且输入内容不能为空
-  const isDisabled = !inputValue.trim() || (isGroup && detailInfo && !isMember)
+  // 只有在明确已经加载完且确认不是成员时才禁用，且输入内容或图片不能为空
+  const isDisabled = (!inputValue.trim() && stagedImages.length === 0) || (isGroup && detailInfo && !isMember)
 
   const members = detailInfo?.memberList || []
   const filteredMembers = [
@@ -81,11 +81,17 @@ export const InputArea: React.FC = () => {
       parts.push({ type: 'text', text: inputValue.substring(lastIndex) })
     }
 
-    // 如果没有识别到特定的 @ 格式，则作为普通文本发送
-    const finalContent: MessageType = parts.length > 0 ? parts : [{ type: 'text' as const, text: inputValue }]
+    // 加入待发送的图片
+    const finalContent: MessageType = [
+      ...parts.length > 0 ? parts : (inputValue.trim() ? [{ type: 'text' as const, text: inputValue }] : []),
+      ...stagedImages.map(url => ({ type: 'image' as const, uri: url }))
+    ]
+
+    if (finalContent.length === 0) return
 
     await sendMsg(currentTarget.type, finalContent)
     setInputValue('')
+    setStagedImages([])
   }
 
   const insertAt = (userId: number | 'all', nickname: string) => {
@@ -131,6 +137,13 @@ export const InputArea: React.FC = () => {
       }
     }
     setAtMenu(null)
+  }
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+      e.preventDefault()
+      handleFiles(e.clipboardData.files)
+    }
   }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -203,24 +216,56 @@ export const InputArea: React.FC = () => {
         <div className='flex items-center gap-1.5 text-mac-text-secondary'>
           <button className='p-2 hover:bg-black/5 rounded-lg transition-all'><Smile className='w-5 h-5' /></button>
           <button
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              if (fileInputRef.current) {
+                fileInputRef.current.accept = 'image/*'
+                fileInputRef.current.click()
+              }
+            }}
             className='p-2 hover:bg-black/5 rounded-lg transition-all'
           >
-            <Paperclip className='w-5 h-5' />
+            <ImageIcon className='w-5 h-5' />
           </button>
-          <button className='p-2 hover:bg-black/5 rounded-lg transition-all'><ImageIcon className='w-5 h-5' /></button>
-          <button className='p-2 hover:bg-black/5 rounded-lg transition-all'><FolderInput className='w-5 h-5' /></button>
+          <button
+            onClick={() => {
+              if (fileInputRef.current) {
+                fileInputRef.current.accept = '*/*'
+                fileInputRef.current.click()
+              }
+            }}
+            className='p-2 hover:bg-black/5 rounded-lg transition-all'
+          >
+            <FolderInput className='w-5 h-5' />
+          </button>
           <button className='p-2 hover:bg-black/5 rounded-lg transition-all ml-auto'><Mic className='w-5 h-5' /></button>
 
           <input
             type='file'
             ref={fileInputRef}
             className='hidden'
+            multiple
             onChange={(e) => {
-              // Handle file upload
+              handleFiles(e.target.files)
+              e.target.value = ''
             }}
           />
         </div>
+
+        {stagedImages.length > 0 && (
+          <div className='flex flex-wrap gap-2 px-1'>
+            {stagedImages.map((src, idx) => (
+              <div key={idx} className='relative group w-20 h-20 rounded-lg overflow-hidden border border-black/5 shadow-sm bg-black/5'>
+                <img src={src} alt='' className='w-full h-full object-cover' />
+                <button
+                  onClick={() => setStagedImages(stagedImages.filter((_, i) => i !== idx))}
+                  className='absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity'
+                >
+                  <X className='w-3 h-3' />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className='relative flex items-end gap-2'>
           <textarea
@@ -228,13 +273,12 @@ export const InputArea: React.FC = () => {
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyPress}
+            onPaste={handlePaste}
             disabled={isGroup && !isMember}
             placeholder={
               !currentTarget
                 ? '选择一个会话开始聊天'
-                : (isGroup && !isMember)
-                  ? '加入群聊后即可发言'
-                  : `发送给 ${currentTarget.name}...`
+                : (isGroup && !isMember) ? '加入群聊后即可发言' : `发送给 ${currentTarget.name}...`
             }
             rows={1}
             className={cn(

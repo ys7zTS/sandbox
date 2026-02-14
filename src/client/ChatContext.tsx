@@ -16,6 +16,7 @@ interface ChatContextType {
   messageCache: Record<string, Message[]>
   setMessageCache: (cache: Record<string, Message[]>) => void
   sendMsg: (scene: ChatScene, content: MessageType) => Promise<void>
+  handleFiles: (files: FileList | null) => Promise<void>
   resendMsg: (tempId: string) => Promise<void>
   loadMe: () => Promise<void>
   loadProfiles: () => Promise<void>
@@ -39,6 +40,10 @@ interface ChatContextType {
   theme: 'light' | 'dark' | 'system'
   setTheme: (theme: 'light' | 'dark' | 'system') => void
   actualTheme: 'light' | 'dark'
+
+  // Staged content for InputArea
+  stagedImages: string[]
+  setStagedImages: (v: string[]) => void
 
   // New shared states
   showMeSettings: boolean
@@ -144,6 +149,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return (localStorage.getItem('theme') as any) || 'system'
   })
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>('light')
+
+  const [stagedImages, setStagedImages] = useState<string[]>([])
 
   const actualTheme = theme === 'system' ? systemTheme : theme
 
@@ -269,6 +276,64 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [me, currentTarget, updateMessageStatus])
 
+  const handleFiles = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0 || !currentTarget) return
+
+    const fileList = Array.from(files)
+    const targetName = currentTarget.name
+
+    const processSingleFile = async (file: File) => {
+      return new Promise<void>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = async (e) => {
+          const base64 = e.target?.result as string
+          if (base64) {
+            const isImage = file.type.startsWith('image/')
+            if (isImage) {
+              setStagedImages(prev => [...prev, base64])
+            } else {
+              const content: MessageType = [{ type: 'file', uri: base64, filename: file.name, size: file.size }]
+              await sendMsg(currentTarget.type, content)
+            }
+          }
+          resolve()
+        }
+        reader.readAsDataURL(file)
+      })
+    }
+
+    const images = fileList.filter(f => f.type.startsWith('image/'))
+    const nonImages = fileList.filter(f => !f.type.startsWith('image/'))
+
+    // 图片直接进入待发送状态，无需确认
+    for (const img of images) {
+      await processSingleFile(img)
+    }
+
+    // 非图片文件走确认流程
+    if (nonImages.length === 1) {
+      setConfirmDialog({
+        title: '发送文件',
+        message: `是否要将文件 "${nonImages[0].name}" 发送到 ${targetName}？`,
+        onConfirm: () => processSingleFile(nonImages[0]),
+        confirmText: '发送',
+        cancelText: '取消'
+      })
+    } else if (nonImages.length > 1) {
+      setConfirmDialog({
+        title: '批量发送文件',
+        message: `确认要将选中的 ${nonImages.length} 个文件发送到 ${targetName} 吗？每个文件将作为独立消息发送。`,
+        onConfirm: async () => {
+          for (const file of nonImages) {
+            await processSingleFile(file)
+          }
+        },
+        confirmText: '确定发送',
+        cancelText: '取消'
+      })
+    }
+  }, [currentTarget, sendMsg, setConfirmDialog])
+
   const resendMsg = useCallback(async (tempId: string) => {
     // Find the message in cache
     let msgToResend: Message | undefined
@@ -320,12 +385,28 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = currentTarget.type === 'private'
         ? await api.send(ActionTypes.GET_USER_INFO, { userId: currentTarget.id })
         : await api.send(ActionTypes.GET_GROUP_INFO, { groupId: currentTarget.id })
+
       setDetailInfo(data as any)
-      setEditInfo(data ? { ...(data as any) } : null)
+
+      // Initialize editInfo
+      let initialEditInfo = data ? { ...(data as any) } : null
+
+      // If it's a group, we also want to be able to edit "My Group Card" in this group
+      if (currentTarget.type === 'group' && data && me) {
+        const myMemberInfo = (data as any).memberList?.find((m: any) => String(m.userId) === String(me.userId))
+        if (myMemberInfo) {
+          initialEditInfo = {
+            ...initialEditInfo,
+            card: myMemberInfo.card || '' // Use the member's card from the list
+          }
+        }
+      }
+
+      setEditInfo(initialEditInfo)
     } catch (e) {
       console.error('Failed to fetch detail', e)
     }
-  }, [currentTarget])
+  }, [currentTarget, me])
 
   useEffect(() => {
     if (currentTarget) {
@@ -338,11 +419,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setShowGroupEdit(false)
       setDetailInfo(null)
       setEditInfo(null)
-      fetchDetail()
     } else {
       setMessages([])
     }
-  }, [currentTarget, loadMessages, fetchDetail])
+  }, [currentTarget?.id, currentTarget?.type, loadMessages])
+
+  useEffect(() => {
+    if (currentTarget) {
+      fetchDetail()
+    }
+  }, [currentTarget, fetchDetail])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -487,20 +573,31 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [editInfo, loadMe])
 
-  const handleSave = useCallback(async () => {
-    if (!currentTarget || !editInfo) return
+  const handleSave = useCallback(async (manualInfo?: any) => {
+    const info = manualInfo || editInfo
+    if (!currentTarget || !info) return
     try {
       if (currentTarget.type === 'private') {
-        await api.send(ActionTypes.SAVE_USER, { ...editInfo, userId: currentTarget.id })
+        await api.send(ActionTypes.SAVE_USER, { ...info, userId: currentTarget.id })
       } else {
-        await api.send(ActionTypes.SAVE_GROUP, { ...editInfo, groupId: currentTarget.id })
+        // Save group basic info
+        await api.send(ActionTypes.SAVE_GROUP, { ...info, groupId: currentTarget.id })
+
+        // If in a group, also update "My Group Card" if it was changed
+        if (me) {
+          await api.send(ActionTypes.UPDATE_GROUP_MEMBER, {
+            groupId: currentTarget.id,
+            userId: me.userId,
+            card: info.card
+          })
+        }
       }
       loadContacts()
       fetchDetail()
     } catch (e) {
       setAlertDialog({ title: '保存失败', message: '无法保存设置，请稍后重试' })
     }
-  }, [currentTarget, editInfo, loadContacts, fetchDetail])
+  }, [currentTarget, editInfo, me, loadContacts, fetchDetail])
 
   const confirmDelete = useCallback(async (mode: 'clear' | 'only') => {
     if (!showDeleteConfirm) return
@@ -671,6 +768,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       messageCache,
       setMessageCache,
       sendMsg,
+      handleFiles,
       resendMsg,
       loadMe,
       loadProfiles,
@@ -693,6 +791,9 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       theme,
       setTheme,
       actualTheme,
+
+      stagedImages,
+      setStagedImages,
 
       showMeSettings,
       setShowMeSettings,

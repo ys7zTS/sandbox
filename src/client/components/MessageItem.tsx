@@ -1,9 +1,8 @@
 import React from 'react'
-import { AlertCircle, Loader2 } from 'lucide-react'
+import { AlertCircle, Loader2, FileIcon, Download } from 'lucide-react'
 import { Message } from '../types'
 import { useChat } from '../ChatContext'
 import { getAvatarUrl } from '../utils'
-import { MessageType } from '../../types/Message'
 
 const cn = (...classes: (string | boolean | undefined)[]) => classes.filter(Boolean).join(' ')
 
@@ -17,6 +16,46 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, showTim
   const { resendMsg, actualTheme, setConfirmDialog, detailInfo, profiles } = useChat()
   const isDark = actualTheme === 'dark'
   const isRecalled = message.isRevoked === 1
+  const isGroup = message.type === 'group'
+
+  const senderMember = isGroup && detailInfo?.memberList?.find((m: any) => String(m.userId) === String(message.senderId))
+  const senderDisplayName = senderMember?.card || senderMember?.nickname || (profiles.find((p: any) => String(p.userId) === String(message.senderId))?.nickname) || message.senderId
+
+  const getRoleTitle = () => {
+    if (!isGroup || !senderMember) return null
+    const role = senderMember.role
+    const customTitle = senderMember.title
+
+    let text = customTitle
+    let colorClasses = ''
+
+    if (role === 'owner') {
+      text = customTitle || '群主'
+      colorClasses = isDark ? 'bg-amber-500/20 border-amber-500/30 text-amber-400' : 'bg-amber-50 border-amber-200 text-amber-600'
+    } else if (role === 'admin') {
+      text = customTitle || '管理员'
+      colorClasses = isDark ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-600'
+    } else {
+      // member
+      text = customTitle || '成员'
+      if (customTitle) {
+        colorClasses = isDark ? 'bg-purple-500/20 border-purple-500/30 text-purple-400' : 'bg-purple-50 border-purple-200 text-purple-600'
+      } else {
+        colorClasses = isDark ? 'bg-gray-500/20 border-gray-500/30 text-gray-400' : 'bg-gray-50 border-gray-200 text-gray-600'
+      }
+    }
+
+    return { text, colorClasses }
+  }
+
+  const roleTitle = getRoleTitle()
+
+  const formatSize = (bytes?: number) => {
+    if (!bytes) return ''
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
 
   const getAtDisplayName = (targetId: number | 'all') => {
     if (targetId === 'all') return '@全体成员'
@@ -38,10 +77,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, showTim
     return `@${targetId}`
   }
 
-  const renderMessageContent = (content: MessageType) => {
-    // 基础兼容：如果 content 是字符串，将其包装为文本类型数组
-    const parts = Array.isArray(content) ? content : [{ type: 'text' as const, text: String(content) }]
+  const parts = Array.isArray(message.content) ? message.content : [{ type: 'text' as const, text: String(message.content) }]
+  const hasText = parts.some(p => (p.type === 'text' && p.text.trim() !== '') || p.type === 'at' || p.type === 'reply')
+  const isPureMedia = !hasText && parts.every(p => ['image', 'file', 'video'].includes(p.type) || (p.type === 'text' && p.text.trim() === ''))
 
+  const renderMessageContent = () => {
     return parts.map((part, idx) => {
       switch (part.type) {
         case 'text':
@@ -52,9 +92,42 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, showTim
               key={idx}
               src={part.url || part.uri}
               alt=''
-              className='max-w-full rounded-lg shadow-sm object-contain'
+              className={cn('max-w-full rounded-lg shadow-sm object-contain cursor-pointer', !isPureMedia && 'my-1')}
               style={{ width: part.width, height: part.height }}
+              onClick={() => window.open(part.url || part.uri, '_blank')}
             />
+          )
+        case 'file':
+          return (
+            <div
+              key={idx}
+              className={cn(
+                'flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer group/file w-full max-w-[280px]',
+                isDark ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-black/5 border-black/5 hover:bg-black/10'
+              )}
+              onClick={() => {
+                const link = document.createElement('a')
+                link.href = part.url || part.uri
+                link.download = part.filename || 'file'
+                link.click()
+              }}
+            >
+              <div className={cn(
+                'w-10 h-10 rounded-lg flex items-center justify-center shrink-0 bg-mac-blue/10'
+              )}
+              >
+                <FileIcon className='w-5 h-5 text-mac-blue' />
+              </div>
+              <div className='flex-1 min-w-0'>
+                <div className={cn('text-xs font-bold truncate', isDark ? 'text-gray-200' : 'text-gray-900')}>
+                  {part.filename || '未知文件'}
+                </div>
+                <div className={cn('text-[10px] opacity-60', isDark ? 'text-gray-400' : 'text-gray-500')}>
+                  {formatSize(part.size)}
+                </div>
+              </div>
+              <Download className='w-4 h-4 opacity-0 group-hover/file:opacity-100 transition-opacity text-mac-blue' />
+            </div>
           )
         case 'video':
           return (
@@ -94,19 +167,36 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, showTim
 
       <div className={cn('flex group items-start gap-3', isMe ? 'flex-row-reverse' : 'flex-row')}>
         {/* Avatar */}
-        <div className='w-9 h-9 rounded-full bg-white flex items-center justify-center shrink-0 shadow-sm overflow-hidden cursor-pointer active:scale-95 transition-transform'>
+        <div className={cn(
+          'w-9 h-9 rounded-full bg-white flex items-center justify-center shrink-0 shadow-sm overflow-hidden cursor-pointer active:scale-95 transition-transform z-10 ring-2 ring-inset',
+          isGroup && senderMember?.role === 'owner'
+            ? 'ring-amber-500/50'
+            : isGroup && senderMember?.role === 'admin' ? 'ring-emerald-500/50' : 'ring-transparent'
+        )}
+        >
           <img src={getAvatarUrl('private', message.senderId)} alt='' className='w-full h-full object-cover' />
         </div>
 
-        {/* Message Bubble Column */}
+        {/* Message Content Column */}
         <div className={cn('flex flex-col max-w-[70%]', isMe ? 'items-end' : 'items-start')}>
-          {!isMe && (
-            <span className={cn('text-[10px] mb-1 px-1', isDark ? 'text-gray-400' : 'text-gray-500')}>
-              {message.senderId}
+          {/* Metadata Row (Title & Display Name) - Always above the bubble */}
+          <div className={cn('flex items-center gap-1.5 mb-1 px-1', isMe ? 'flex-row-reverse' : 'flex-row')}>
+            {isGroup && roleTitle && (
+              <span className={cn(
+                'text-[8px] px-1 py-0.5 rounded font-black uppercase tracking-widest shadow-sm border whitespace-nowrap leading-none',
+                roleTitle.colorClasses
+              )}
+              >
+                {roleTitle.text}
+              </span>
+            )}
+            <span className={cn('text-[10px] font-bold opacity-50 truncate max-w-[120px] leading-none', isDark ? 'text-gray-400' : 'text-gray-500')}>
+              {isGroup ? senderDisplayName : (!isMe ? message.senderId : '')}
             </span>
-          )}
+          </div>
 
           <div className='flex items-center gap-2 group'>
+            {/* Status Indicators (Left of bubble if isMe) */}
             {/* Status Indicators (Left of bubble if isMe) */}
             {isMe && message.status === 'sending' && (
               <Loader2 className='w-4 h-4 text-mac-blue animate-spin shrink-0' />
@@ -131,23 +221,27 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, showTim
 
             <div
               className={cn(
-                'relative px-4 py-2.5 rounded-2xl shadow-sm text-sm break-all leading-relaxed transition-all duration-300',
+                'relative transition-all duration-300',
+                isPureMedia ? '' : 'px-4 py-2.5 rounded-2xl shadow-sm text-sm break-all leading-relaxed',
                 isRecalled
                   ? (isDark ? 'bg-red-900/30 text-red-200/50' : 'bg-red-50 text-red-400')
-                  : isMe
-                    ? 'bg-mac-blue text-white'
-                    : (isDark ? 'bg-gray-800 text-gray-200' : 'bg-white border border-mac-border text-mac-text-main')
+                  : isPureMedia
+                    ? ''
+                    : isMe
+                      ? 'bg-mac-blue text-white'
+                      : (isDark ? 'bg-gray-800 text-gray-200' : 'bg-white border border-mac-border text-mac-text-main')
               )}
             >
               {isRecalled && (
                 <div className={cn(
                   'absolute -top-2 -right-2 px-1.5 py-0.5 rounded-md text-[9px] shadow-sm font-medium border animate-in fade-in zoom-in duration-300',
                   isDark ? 'bg-gray-800 border-red-900/50 text-red-400' : 'bg-white border-red-100 text-red-400'
-                )}>
+                )}
+                >
                   已撤回
                 </div>
               )}
-              {renderMessageContent(message.content)}
+              {renderMessageContent()}
             </div>
 
             {/* Status Indicators (Right of bubble if not isMe - though failed usually only happens for isMe) */}

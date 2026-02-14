@@ -1,5 +1,5 @@
 import React from 'react'
-import { User, Trash2, Plus, ChevronDown } from 'lucide-react'
+import { User, Trash2, Plus } from 'lucide-react'
 import { useChat } from '../ChatContext'
 
 const cn = (...classes: (string | boolean | undefined)[]) => classes.filter(Boolean).join(' ')
@@ -156,7 +156,8 @@ export const Overlays: React.FC = () => {
                     <div className='flex-1 space-y-1.5'>
                       <label className={cn('text-[10px] font-bold px-1 uppercase tracking-widest opacity-60', isDark ? 'text-gray-300' : 'text-gray-500')}>性别</label>
                       <div className={cn('flex p-1 rounded-2xl border backdrop-blur-md transition-all',
-                        isDark ? 'bg-black/20 border-white/10' : 'bg-white/50 border-black/5')}>
+                        isDark ? 'bg-black/20 border-white/10' : 'bg-white/50 border-black/5')}
+                      >
                         {[
                           { val: 'male', label: '男' },
                           { val: 'female', label: '女' },
@@ -253,7 +254,8 @@ export const Overlays: React.FC = () => {
                 setContextMenu(null)
               }}
               className={cn('w-full flex items-center gap-2.5 px-3 py-2 text-xs rounded-xl transition-colors text-red-500',
-                isDark ? 'hover:bg-red-500 hover:text-white' : 'hover:bg-red-500 hover:text-white')}>
+                isDark ? 'hover:bg-red-500 hover:text-white' : 'hover:bg-red-500 hover:text-white')}
+            >
               <Trash2 className='w-4 h-4' /> 删除
             </button>
           </div>
@@ -270,7 +272,8 @@ export const Overlays: React.FC = () => {
               : toast.type === 'error'
                 ? (isDark ? 'bg-red-500/20 border-red-500/30 text-red-400' : 'bg-red-50/80 border-red-200 text-red-600')
                 : (isDark ? 'bg-gray-800/80 border-white/10 text-white' : 'bg-white/80 border-black/5 text-mac-text-main')
-          )}>
+          )}
+          >
             <div className={cn('w-2 h-2 rounded-full animate-pulse',
               toast.type === 'success' ? 'bg-green-500' : toast.type === 'error' ? 'bg-red-500' : 'bg-mac-blue')}
             />
@@ -332,7 +335,8 @@ export const Overlays: React.FC = () => {
       {showDeleteConfirm && (
         <div className='fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200'>
           <div className={cn('w-full max-w-[340px] rounded-[24px] shadow-2xl border-2 overflow-hidden animate-in zoom-in-95 duration-200 backdrop-blur-3xl',
-            isDark ? 'bg-gray-800/90 border-white/10' : 'bg-white/95 border-black/5')}>
+            isDark ? 'bg-gray-800/90 border-white/10' : 'bg-white/95 border-black/5')}
+          >
             <div className='p-8 text-center space-y-4'>
               <div className='w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-4'>
                 <Trash2 className='w-8 h-8 text-red-500' />
