@@ -1,25 +1,3 @@
-export type WSOPType = 'Event' | 'System' | 'Action' | 'Response'
-
-export interface WSMessage<T = unknown> {
-  type: WSOPType
-  data: T
-  echo?: string // 用于前端识别响应
-}
-
-export type WSEventType = 'message' | 'group_join' | 'group_leave' | 'friend_add' | 'friend_delete'
-export type WSSystemType = 'group_notification' | 'group_transfer' | 'title_acquired'
-
-export interface WSEventPayload<T = unknown> {
-  event: WSEventType
-  payload: T
-}
-
-export interface WSSystemPayload<T = unknown> {
-  subType: WSSystemType
-  content: string
-  data?: T
-}
-
 export const ActionTypes = {
   // 用户相关
   GET_USER_INFO: 'get_user_info',
@@ -62,4 +40,14 @@ export const ActionTypes = {
   // 系统相关
   HEARTBEAT: 'heartbeat',
   ACK: 'ack'
+} as const
+
+export type ActionType = typeof ActionTypes[keyof typeof ActionTypes]
+
+export type WSOPType = 'Event' | 'System' | 'Action' | 'Response' | ActionType
+
+export interface WSMessage<T = any> {
+  type: WSOPType
+  data: T
+  echo?: string // 用于前端识别响应
 }

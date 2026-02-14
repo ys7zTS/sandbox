@@ -201,7 +201,11 @@ export const Sidebar: React.FC = () => {
           {contacts.map((contact: Contact) => {
             const id = contact.type === 'private' ? contact.userId : contact.groupId
             const key = `${contact.type}-${id}`
-            const lastMsg = contact.lastMsg || (messageCache[key] ? messageCache[key][messageCache[key].length - 1] : null)
+            const cachedMsgs = messageCache[key]
+            const cachedLast = cachedMsgs && cachedMsgs.length > 0 ? cachedMsgs[cachedMsgs.length - 1] : null
+            const lastMsg = cachedLast && (!contact.lastMsg || cachedLast.timestamp >= contact.lastMsg.timestamp)
+              ? cachedLast
+              : contact.lastMsg
             const lastTime = lastMsg ? new Date(lastMsg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
             const unreadCount = contact.unreadCount || 0
             const name = contact.type === 'private' ? (contact as UserInfo).nickname : (contact as GroupInfo).groupName

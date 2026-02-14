@@ -54,6 +54,8 @@ export interface GroupInfo {
   memberList: GroupMember[]
   unreadCount?: number
   lastMsg?: Message
+  announcement?: string
+  card?: string // For editing current user's card in this group
 }
 
 export type Contact = UserInfo | GroupInfo

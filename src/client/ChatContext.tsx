@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { Message, UserInfo, Contact, Target, ChatScene } from './types'
+import { Message, UserInfo, Contact, Target, ChatScene, GroupInfo, GroupMember } from './types'
 import { MessageType } from '../types/Message'
 import { ActionTypes } from '../core/protocol'
 import { api } from './api'
@@ -48,26 +48,26 @@ interface ChatContextType {
   // New shared states
   showMeSettings: boolean
   setShowMeSettings: (v: boolean) => void
-  detailInfo: any
-  setDetailInfo: (v: any) => void
-  editInfo: any
-  setEditInfo: (v: any) => void
+  detailInfo: UserInfo | GroupInfo | null
+  setDetailInfo: (v: UserInfo | GroupInfo | null) => void
+  editInfo: UserInfo | GroupInfo | null
+  setEditInfo: (v: UserInfo | GroupInfo | null) => void
   showDeleteConfirm: { type: 'dissolve' | 'friend' | 'user' | 'group', id: number, clearMessages: boolean } | null
   setShowDeleteConfirm: (v: { type: 'dissolve' | 'friend' | 'user' | 'group', id: number, clearMessages: boolean } | null) => void
   showCreateModal: 'private' | 'group' | null
   setShowCreateModal: (v: 'private' | 'group' | null) => void
   backendError: string | null
   setBackendError: (v: string | null) => void
-  createData: { name: string, id: string, age: number, gender: any }
-  setCreateData: (v: { name: string, id: string, age: number, gender: any }) => void
+  createData: { name: string, id: string, age: number, gender: 'male' | 'female' | 'unknown' }
+  setCreateData: (v: { name: string, id: string, age: number, gender: 'male' | 'female' | 'unknown' }) => void
   replyTo: Message | null
   setReplyTo: (v: Message | null) => void
   showMembersSidebar: boolean
   setShowMembersSidebar: (v: boolean) => void
   showMemberInfoSidebar: boolean
   setShowMemberInfoSidebar: (v: boolean) => void
-  selectedMember: any
-  setSelectedMember: (v: any) => void
+  selectedMember: GroupMember | null
+  setSelectedMember: (v: GroupMember | null) => void
   showTransferSidebar: boolean
   setShowTransferSidebar: (v: boolean) => void
   showAvatarZoom: { url: string, type: 'private' | 'group', id: number } | null
@@ -110,7 +110,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profiles, setProfiles] = useState<UserInfo[]>([])
   const [showProfilesSidebar, setShowProfilesSidebar] = useState(false)
   const [plusMenu, setPlusMenu] = useState<{ x: number, y: number } | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, type: any, data: any } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number, type: 'contact' | 'profile' | 'message', data: any } | null>(null)
   const [toast, _setToast] = useState<{ message: string, type: 'success' | 'error' | 'info' } | null>(null)
 
   const setToast = useCallback((val: string | { message: string, type: 'success' | 'error' | 'info' } | null) => {
@@ -129,16 +129,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [toast])
 
   const [showMeSettings, setShowMeSettings] = useState(false)
-  const [detailInfo, setDetailInfo] = useState<any>(null)
-  const [editInfo, setEditInfo] = useState<any>(null)
+  const [detailInfo, setDetailInfo] = useState<UserInfo | GroupInfo | null>(null)
+  const [editInfo, setEditInfo] = useState<UserInfo | GroupInfo | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ type: 'dissolve' | 'friend' | 'user' | 'group', id: number, clearMessages: boolean } | null>(null)
   const [showCreateModal, setShowCreateModal] = useState<'private' | 'group' | null>(null)
   const [backendError, setBackendError] = useState<string | null>(null)
-  const [createData, setCreateData] = useState({ name: '', id: '', age: 20, gender: 'unknown' as any })
+  const [createData, setCreateData] = useState({ name: '', id: '', age: 20, gender: 'unknown' as 'male' | 'female' | 'unknown' })
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [showMembersSidebar, setShowMembersSidebar] = useState(false)
   const [showMemberInfoSidebar, setShowMemberInfoSidebar] = useState(false)
-  const [selectedMember, setSelectedMember] = useState<any>(null)
+  const [selectedMember, setSelectedMember] = useState<GroupMember | null>(null)
   const [showTransferSidebar, setShowTransferSidebar] = useState(false)
   const [showAvatarZoom, setShowAvatarZoom] = useState<{ url: string, type: 'private' | 'group', id: number } | null>(null)
   const [showGroupEdit, setShowGroupEdit] = useState(false)
@@ -146,7 +146,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [confirmDialog, setConfirmDialog] = useState<{ title: string, message: string, onConfirm: () => void, confirmText?: string, cancelText?: string } | null>(null)
 
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
-    return (localStorage.getItem('theme') as any) || 'system'
+    return (localStorage.getItem('theme') as 'light' | 'dark' | 'system') || 'system'
   })
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>('light')
 
@@ -246,7 +246,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     // Add to cache and current messages
-    const cacheKey = `${scene}_${currentTarget.id}`
+    const cacheKey = `${scene}-${currentTarget.id}`
     setMessageCache(prev => ({
       ...prev,
       [cacheKey]: [...(prev[cacheKey] || []), newMessage]
@@ -452,6 +452,20 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const peerId = msg.type === 'group' ? msg.targetId : (msg.senderId === me?.userId ? msg.targetId : msg.senderId)
       const key = `${msg.type}-${peerId}`
 
+      setContacts(prev => prev.map(c => {
+        const cId = c.type === 'private' ? c.userId : c.groupId
+        if (c.type === msg.type && cId === peerId) {
+          const isMe = msg.senderId === me?.userId
+          const isCurrentChat = currentTarget && currentTarget.type === msg.type && currentTarget.id === peerId
+          return {
+            ...c,
+            lastMsg: msg,
+            unreadCount: (!isMe && !isCurrentChat) ? (c.unreadCount || 0) + 1 : (c.unreadCount || 0)
+          }
+        }
+        return c
+      }))
+
       setMessageCache(prev => {
         const current = prev[key] || []
         // 幂等处理：通过 seq 或 tempId 判定（防止发送者收到自己的广播后重复显示）
@@ -468,9 +482,9 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       })
 
-      if (currentTarget && (
-        (currentTarget.type === 'group' && currentTarget.id === msg.targetId) ||
-        (currentTarget.type === 'private' && (currentTarget.id === msg.senderId || currentTarget.id === msg.targetId))
+      if (currentTarget && currentTarget.type === msg.type && (
+        (msg.type === 'group' && currentTarget.id === msg.targetId) ||
+        (msg.type === 'private' && (currentTarget.id === msg.senderId || currentTarget.id === msg.targetId))
       )) {
         setMessages(prev => {
           if (prev.some(m => (m.seq && m.seq === msg.seq) || (m.tempId && msg.tempId && m.tempId === msg.tempId))) {
@@ -487,6 +501,20 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const peerId = msg.type === 'group' ? msg.targetId : (msg.senderId === me?.userId ? msg.targetId : msg.senderId)
       const key = `${msg.type}-${peerId}`
 
+      setContacts(prev => prev.map(c => {
+        const cId = c.type === 'private' ? c.userId : c.groupId
+        if (c.type === msg.type && cId === peerId) {
+          const isMe = msg.senderId === me?.userId
+          const isCurrentChat = currentTarget && currentTarget.type === msg.type && currentTarget.id === peerId
+          return {
+            ...c,
+            lastMsg: msg,
+            unreadCount: (!isMe && !isCurrentChat) ? (c.unreadCount || 0) + 1 : (c.unreadCount || 0)
+          }
+        }
+        return c
+      }))
+
       setMessageCache(prev => {
         const current = prev[key] || []
         if (current.some(m => (m.seq && m.seq === msg.seq) || (m.tempId && msg.tempId && m.tempId === msg.tempId))) {
@@ -501,9 +529,9 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       })
 
-      if (currentTarget && (
-        (currentTarget.type === 'group' && currentTarget.id === msg.targetId) ||
-        (currentTarget.type === 'private' && (currentTarget.id === msg.senderId || currentTarget.id === msg.targetId))
+      if (currentTarget && currentTarget.type === msg.type && (
+        (msg.type === 'group' && currentTarget.id === msg.targetId) ||
+        (msg.type === 'private' && (currentTarget.id === msg.senderId || currentTarget.id === msg.targetId))
       )) {
         setMessages(prev => {
           if (prev.some(m => (m.seq && m.seq === msg.seq) || (m.tempId && msg.tempId && m.tempId === msg.tempId))) {
@@ -515,7 +543,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     })
 
     const unbindRecall = api.on(ActionTypes.RECALL, (data: any) => {
-      const { type, targetId, seq } = data
+      const { type, seq } = data
       // 更新缓存
       setMessageCache(prev => {
         const newCache = { ...prev }
@@ -563,7 +591,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [loadMe, loadProfiles])
 
   const handleSaveMe = useCallback(async () => {
-    if (!editInfo || !editInfo.userId) return
+    if (!editInfo || editInfo.type !== 'private') return
     try {
       await api.send(ActionTypes.SAVE_USER, editInfo)
       setShowMeSettings(false)
@@ -666,7 +694,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setToast({ message: '成功加入群聊', type: 'success' })
         await loadMe()
       } else {
-        const isOwner = currentTarget.type === 'group' && String(detailInfo?.ownerId) === String(me.userId)
+        const isOwner = currentTarget.type === 'group' && detailInfo?.type === 'group' && String(detailInfo.ownerId) === String(me.userId)
         if (isOwner) {
           setConfirmDialog({
             title: '群主退群',

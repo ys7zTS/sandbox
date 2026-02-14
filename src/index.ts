@@ -5,8 +5,8 @@ import multer from 'multer'
 import { WebSocketServer, WebSocket } from 'ws'
 import { createServer } from 'http'
 import { dbService } from './core/db'
-import { GetMsgPayload, SendMsgPayload } from './core/types'
-import { ActionTypes, WSMessage } from './core/protocol'
+import { SendMsgPayload, UnifiedUser, UnifiedGroup, GroupMemberInfo } from './core/types'
+import { ActionTypes, WSMessage, WSOPType } from './core/protocol'
 import { eventBus, Events, MessageSavedEvent } from './core/bus'
 import { messageService } from './core/messageService'
 
@@ -23,9 +23,9 @@ eventBus.on(Events.MESSAGE_SAVED, ({ message }: MessageSavedEvent) => {
     sendToUsers([message.senderId, message.targetId], { type: ActionTypes.PUSH_MESSAGE, data: message })
   } else {
     // 群聊消息：发送给群内在线成员
-    const group = dbService.getGroupInfo(message.targetId) as any
+    const group = dbService.getGroupInfo(message.targetId) as UnifiedGroup | undefined
     if (group && group.memberList) {
-      const memberIds = group.memberList.map((m: any) => m.userId)
+      const memberIds = group.memberList.map((m: GroupMemberInfo) => m.userId)
       sendToUsers(memberIds, { type: ActionTypes.PUSH_MESSAGE, data: message })
     }
   }
@@ -40,9 +40,9 @@ eventBus.on(Events.MESSAGE_RECALLED, ({ type, seq, message }: any) => {
       data: { type, seq, targetId: message?.senderId }
     })
   } else {
-    const group = dbService.getGroupInfo(message.targetId) as any
+    const group = dbService.getGroupInfo(message.targetId) as UnifiedGroup | undefined
     if (group && group.memberList) {
-      const memberIds = group.memberList.map((m: any) => m.userId)
+      const memberIds = group.memberList.map((m: GroupMemberInfo) => m.userId)
       sendToUsers(memberIds, {
         type: ActionTypes.RECALL,
         data: { type, seq, targetId: message.targetId }
@@ -119,13 +119,13 @@ wss.on('connection', (ws, req) => {
   }, 30000)
 
   ws.on('message', async (message) => {
-    let type: string | undefined
+    let type: WSOPType | undefined
     let echo: string | undefined
     try {
       const parsed = JSON.parse(message.toString()) as WSMessage
       type = parsed.type
       echo = parsed.echo
-      const data = parsed.data
+      const data = parsed.data as any // We will cast locally for better types
 
       const session = clients.get(ws)!
       let result: any = null
@@ -136,7 +136,7 @@ wss.on('connection', (ws, req) => {
           return
 
         case ActionTypes.GET_USER_INFO: {
-          const target = data?.target || data?.userId
+          const target = (data as { target?: any, userId?: any })?.target || (data as { target?: any, userId?: any })?.userId
           if (target === 'current') {
             result = session.userId
               ? dbService.getUserInfo(session.userId)
@@ -148,12 +148,13 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.SAVE_USER: {
-          const nickname = data.nickname?.trim() || `用户 ${data.userId}`
+          const payload = data as UnifiedUser
+          const nickname = payload.nickname?.trim() || `用户 ${payload.userId}`
           dbService.saveUser({
-            ...data,
+            ...payload,
             nickname,
-            userId: Number(data.userId),
-            age: data.age ? Number(data.age) : undefined
+            userId: Number(payload.userId),
+            age: payload.age ? Number(payload.age) : undefined
           })
           // 触发所有连接的同步以更新联系人列表
           broadcastSync()
@@ -162,7 +163,8 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.SET_ACTIVE_USER: {
-          const uid = Number(data.userId)
+          const payload = data as { userId: any }
+          const uid = Number(payload.userId)
           const exists = dbService.getUserInfo(uid)
           if (uid !== 0 && (!exists || (Array.isArray(exists) && exists.length === 0))) {
             session.userId = 0
@@ -175,14 +177,16 @@ wss.on('connection', (ws, req) => {
           break
         }
 
-        case ActionTypes.REMOVE_USER:
-          dbService.removeUser(Number(data.userId), { clearMessages: !!data.clearMessages })
+        case ActionTypes.REMOVE_USER: {
+          const payload = data as { userId: any, clearMessages?: boolean }
+          dbService.removeUser(Number(payload.userId), { clearMessages: !!payload.clearMessages })
           broadcastSync()
           result = { status: 'ok' }
           break
+        }
 
         case ActionTypes.UPDATE_FRIENDSHIP: {
-          const { userAId, userBId, action, clearMessages } = data
+          const { userAId, userBId, action, clearMessages } = data as { userAId: any, userBId: any, action: 'add' | 'remove', clearMessages?: boolean }
           const a = Number(userAId)
           const b = Number(userBId)
           dbService.updateFriendship(a, b, action)
@@ -194,18 +198,20 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.GET_GROUP_INFO: {
-          const target = data?.target || data?.groupId
+          const payload = data as { target?: any, groupId?: any }
+          const target = payload?.target || payload?.groupId
           result = dbService.getGroupInfo(parseTarget(target))
           break
         }
 
         case ActionTypes.SAVE_GROUP: {
-          const groupName = data.groupName?.trim() || `群聊 ${data.groupId}`
-          const groupId = Number(data.groupId)
-          const ownerId = data.ownerId ? Number(data.ownerId) : undefined
+          const payload = data as UnifiedGroup
+          const groupName = payload.groupName?.trim() || `群聊 ${payload.groupId}`
+          const groupId = Number(payload.groupId)
+          const ownerId = payload.ownerId ? Number(payload.ownerId) : undefined
 
           dbService.saveGroup({
-            ...data,
+            ...payload,
             groupName,
             groupId,
             ownerId
@@ -213,13 +219,13 @@ wss.on('connection', (ws, req) => {
 
           // 如果创建群聊时有指定的群主，确保群主在成员列表中
           if (ownerId && ownerId !== 0) {
-            const owner = dbService.getUserInfo(ownerId)
+            const owner = dbService.getUserInfo(ownerId) as UnifiedUser | undefined
             if (owner && !Array.isArray(owner)) {
               dbService.upsertGroupMember(groupId, {
                 userId: ownerId,
-                nickname: (owner as any).nickname,
-                gender: (owner as any).gender,
-                age: (owner as any).age,
+                nickname: owner.nickname,
+                gender: owner.gender,
+                age: owner.age,
                 role: 'owner',
                 joinTime: Math.floor(Date.now() / 1000)
               })
@@ -232,20 +238,23 @@ wss.on('connection', (ws, req) => {
           break
         }
 
-        case ActionTypes.REMOVE_GROUP:
-          dbService.removeGroup(Number(data.groupId), { clearMessages: !!data.clearMessages })
+        case ActionTypes.REMOVE_GROUP: {
+          const payload = data as { groupId: any, clearMessages?: boolean }
+          dbService.removeGroup(Number(payload.groupId), { clearMessages: !!payload.clearMessages })
           broadcastSync()
           result = { status: 'ok' }
           break
+        }
 
         case ActionTypes.JOIN_GROUP: {
-          const joinUser = dbService.getUserInfo(Number(data.userId))
+          const payload = data as { userId: any, groupId: any }
+          const joinUser = dbService.getUserInfo(Number(payload.userId)) as UnifiedUser | undefined
           if (joinUser && !Array.isArray(joinUser)) {
-            dbService.upsertGroupMember(Number(data.groupId), {
+            dbService.upsertGroupMember(Number(payload.groupId), {
               userId: Number(joinUser.userId),
-              nickname: (joinUser as any).nickname || '',
-              gender: (joinUser as any).gender || 'unknown',
-              age: (joinUser as any).age || 0,
+              nickname: joinUser.nickname || '',
+              gender: joinUser.gender || 'unknown',
+              age: joinUser.age || 0,
               role: 'member',
               joinTime: Math.floor(Date.now() / 1000)
             })
@@ -253,17 +262,17 @@ wss.on('connection', (ws, req) => {
             const sysMsg = dbService.saveMsg({
               type: 'group',
               senderId: 1,
-              targetId: Number(data.groupId),
-              content: `@${joinUser.userId} 加入群聊`,
+              targetId: Number(payload.groupId),
+              content: [{ type: 'text', text: `@${joinUser.userId} 加入群聊` }],
               timestamp: Math.floor(Date.now() / 1000),
               isRevoked: 0
             })
             // 推送给群成员
-            const group = dbService.getGroupInfo(Number(data.groupId)) as any
+            const group = dbService.getGroupInfo(Number(payload.groupId)) as UnifiedGroup | undefined
             if (group && group.memberList) {
-              const ids = group.memberList.map((m: any) => m.userId)
+              const ids = group.memberList.map((m) => m.userId)
               sendToUsers(ids, { type: ActionTypes.PUSH_MESSAGE, data: sysMsg })
-              sendToUsers(ids, { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: Number(data.groupId) } })
+              sendToUsers(ids, { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: Number(payload.groupId) } })
             }
           }
           result = { status: 'ok' }
@@ -271,9 +280,10 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.LEAVE_GROUP: {
-          const gid = Number(data.groupId)
-          const uid = Number(data.userId)
-          const group = dbService.getGroupInfo(gid) as any
+          const payload = data as { userId: any, groupId: any }
+          const gid = Number(payload.groupId)
+          const uid = Number(payload.userId)
+          const group = dbService.getGroupInfo(gid) as UnifiedGroup | undefined
           if (group && group.ownerId === uid) {
             // 群主退出，解散群聊，保留消息
             dbService.removeGroup(gid, { clearMessages: false })
@@ -282,39 +292,41 @@ wss.on('connection', (ws, req) => {
           }
           // 推送群成员更新事件
           if (group && group.memberList) {
-            sendToUsers(group.memberList.map((m: any) => m.userId), { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
+            sendToUsers(group.memberList.map((m) => m.userId), { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
           }
           result = { status: 'ok' }
           break
         }
 
         case ActionTypes.SET_GROUP_ADMIN: {
-          const gid = Number(data.groupId)
-          dbService.updateGroupMemberRole(gid, Number(data.userId), data.isAdmin ? 'admin' : 'member')
-          const group = dbService.getGroupInfo(gid) as any
+          const payload = data as { userId: any, groupId: any, isAdmin: boolean }
+          const gid = Number(payload.groupId)
+          dbService.updateGroupMemberRole(gid, Number(payload.userId), payload.isAdmin ? 'admin' : 'member')
+          const group = dbService.getGroupInfo(gid) as UnifiedGroup | undefined
           if (group && group.memberList) {
-            sendToUsers(group.memberList.map((m: any) => m.userId), { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
+            sendToUsers(group.memberList.map((m) => m.userId), { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
           }
           result = { status: 'ok' }
           break
         }
 
         case ActionTypes.UPDATE_GROUP_MEMBER: {
-          const gid = Number(data.groupId)
-          const group = dbService.getGroupInfo(gid) as any
-          const oldMember = group?.memberList?.find((m: any) => m.userId === Number(data.userId))
-          dbService.updateGroupMemberInfo(gid, Number(data.userId), data)
+          const payload = data as GroupMemberInfo & { groupId: any }
+          const gid = Number(payload.groupId)
+          const group = dbService.getGroupInfo(gid) as UnifiedGroup | undefined
+          const oldMember = group?.memberList?.find((m: any) => m.userId === Number(payload.userId))
+          dbService.updateGroupMemberInfo(gid, Number(payload.userId), payload)
 
           if (group && group.memberList) {
             const ids = group.memberList.map((m: any) => m.userId)
             // 如果头衔发生变化，发送系统消息
-            if (data.title !== undefined && data.title !== oldMember?.title) {
-              if (data.title) {
+            if (payload.title !== undefined && payload.title !== oldMember?.title) {
+              if (payload.title) {
                 const titleMsg = dbService.saveMsg({
                   type: 'group',
                   senderId: 1,
                   targetId: gid,
-                  content: `@${data.userId} 获得群主授予的头衔「${data.title}」`,
+                  content: [{ type: 'text', text: `@${payload.userId} 获得群主授予的头衔「${payload.title}」` }],
                   timestamp: Math.floor(Date.now() / 1000),
                   isRevoked: 0
                 })
@@ -328,9 +340,10 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.TRANSFER_GROUP_OWNER: {
-          const gid = Number(data.groupId)
-          dbService.transferGroupOwner(gid, Number(data.userId))
-          const group = dbService.getGroupInfo(gid) as any
+          const payload = data as { groupId: any, userId: any }
+          const gid = Number(payload.groupId)
+          dbService.transferGroupOwner(gid, Number(payload.userId))
+          const group = dbService.getGroupInfo(gid) as UnifiedGroup | undefined
           if (group && group.memberList) {
             const ids = group.memberList.map((m: any) => m.userId)
             // 发送系统消息
@@ -338,7 +351,7 @@ wss.on('connection', (ws, req) => {
               type: 'group',
               senderId: 1,
               targetId: gid,
-              content: `群主已转让给 @${data.userId}`,
+              content: [{ type: 'text', text: `群主已转让给 @${payload.userId}` }],
               timestamp: Math.floor(Date.now() / 1000),
               isRevoked: 0
             })
@@ -350,12 +363,13 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.GET_MESSAGES: {
+          const payload = data as { type: 'private' | 'group', targetId: any, limit?: number }
           const session = clients.get(ws)!
-          const activeId = session.userId ?? (dbService.getUserInfo('current') as any)?.userId
+          const activeId = session.userId ?? (dbService.getUserInfo('current') as UnifiedUser)?.userId
           result = dbService.getMsg({
-            type: data.type,
-            targetId: Number(data.targetId),
-            limit: data.limit,
+            type: payload.type,
+            targetId: Number(payload.targetId),
+            limit: payload.limit,
             selfId: activeId
           })
           break
@@ -364,7 +378,7 @@ wss.on('connection', (ws, req) => {
         case ActionTypes.SEND_MESSAGE: {
           const sendPayload = data as SendMsgPayload
           const session = clients.get(ws)!
-          const curActiveId = session.userId ?? (dbService.getUserInfo('current') as any)?.userId
+          const curActiveId = session.userId ?? (dbService.getUserInfo('current') as UnifiedUser)?.userId
           const senderId = sendPayload.senderId ?? curActiveId
           if (!senderId) throw new Error('sender not resolved')
 
@@ -373,7 +387,7 @@ wss.on('connection', (ws, req) => {
             senderId: Number(senderId),
             targetId: Number(sendPayload.targetId),
             content: sendPayload.content,
-            tempId: data.tempId // 传递 tempId 以便前端去重
+            tempId: (data as any).tempId // 传递 tempId 以便前端去重
           })
 
           result = { seq: saved.seq, timestamp: saved.timestamp, tempId: saved.tempId }
@@ -381,19 +395,22 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.SET_READ: {
+          const payload = data as { type: 'private' | 'group', targetId: any, seq: any }
           const session = clients.get(ws)!
-          const curActiveId = session.userId ?? (dbService.getUserInfo('current') as any)?.userId
+          const curActiveId = session.userId ?? (dbService.getUserInfo('current') as UnifiedUser)?.userId
           if (curActiveId) {
-            dbService.updateReadState(curActiveId, data.type, Number(data.targetId), Number(data.seq))
+            dbService.updateReadState(curActiveId, payload.type, Number(payload.targetId), Number(payload.seq))
           }
           result = { status: 'ok' }
           break
         }
 
-        case ActionTypes.RECALL_MESSAGE:
-          await messageService.recallMessage(data.type, Number(data.seq))
+        case ActionTypes.RECALL_MESSAGE: {
+          const payload = data as { type: 'private' | 'group', seq: any }
+          await messageService.recallMessage(payload.type, Number(payload.seq))
           result = { status: 'ok' }
           break
+        }
 
         case ActionTypes.ACK:
           // 仅作为占位
@@ -423,15 +440,6 @@ wss.on('connection', (ws, req) => {
   })
 })
 
-function broadcast (msg: WSMessage) {
-  const payload = JSON.stringify(msg)
-  clients.forEach((_, client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload)
-    }
-  })
-}
-
 /**
  * 广播同步事件给所有客户端
  */
@@ -458,26 +466,26 @@ function sendToUsers (userIds: number[], msg: WSMessage) {
 
 async function syncClient (ws: WebSocket) {
   const session = clients.get(ws)
-  let me = (session?.userId ? dbService.getUserInfo(session.userId) : null) as any
+  let me = (session?.userId ? dbService.getUserInfo(session.userId) : null) as UnifiedUser | UnifiedUser[] | undefined
 
-  if (!me) {
+  if (!me || Array.isArray(me)) {
     if (session) session.userId = 0
     me = { userId: 0, nickname: '访客', age: 0, gender: 'unknown', friendList: [], groupList: [] }
   }
 
-  const friends = dbService.getUserInfo('all') as any[]
-  const groups = dbService.getGroupInfo('all') as any[]
+  const friends = dbService.getUserInfo('all') as UnifiedUser[]
+  const groups = dbService.getGroupInfo('all') as UnifiedGroup[]
 
   const contacts = [
-    ...friends.map(f => ({ ...f, type: 'private' })),
-    ...groups.map(g => ({ ...g, type: 'group' }))
+    ...friends.map(f => ({ ...f, type: 'private' as const })),
+    ...groups.map(g => ({ ...g, type: 'group' as const }))
   ]
 
   const syncData = {
     me,
     contacts: contacts.map(c => {
-      const scene = c.type as 'private' | 'group'
-      const targetId = scene === 'private' ? c.userId : c.groupId
+      const scene = c.type
+      const targetId = scene === 'private' ? (c as UnifiedUser).userId : (c as UnifiedGroup).groupId
       const lastReadSeq = dbService.getReadState(me.userId, scene, targetId)
 
       // 获取最后一条消息及其 seq
@@ -488,7 +496,7 @@ async function syncClient (ws: WebSocket) {
         ...c,
         lastReadSeq,
         lastMsg: lastMsg || null,
-        unreadCount: lastMsg ? Math.max(0, lastMsg.seq - lastReadSeq) : 0
+        unreadCount: lastMsg && lastMsg.seq !== undefined ? Math.max(0, lastMsg.seq - lastReadSeq) : 0
       }
     })
   }

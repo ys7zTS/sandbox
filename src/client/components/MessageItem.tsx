@@ -18,8 +18,8 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, showTim
   const isRecalled = message.isRevoked === 1
   const isGroup = message.type === 'group'
 
-  const senderMember = isGroup && detailInfo?.memberList?.find((m: any) => String(m.userId) === String(message.senderId))
-  const senderDisplayName = senderMember?.card || senderMember?.nickname || (profiles.find((p: any) => String(p.userId) === String(message.senderId))?.nickname) || message.senderId
+  const senderMember = (isGroup && detailInfo?.type === 'group') ? detailInfo?.memberList?.find((m) => String(m.userId) === String(message.senderId)) : undefined
+  const senderDisplayName = senderMember ? (senderMember.card || senderMember.nickname) : (profiles.find((p) => String(p.userId) === String(message.senderId))?.nickname) || message.senderId
 
   const getRoleTitle = () => {
     if (!isGroup || !senderMember) return null
@@ -61,15 +61,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({ message, isMe, showTim
     if (targetId === 'all') return '@全体成员'
 
     // 如果是群聊，尝试从群成员列表中获取名片
-    if (message.type === 'group' && detailInfo?.memberList) {
-      const member = detailInfo.memberList.find((m: any) => String(m.userId) === String(targetId))
+    if (message.type === 'group' && detailInfo?.type === 'group' && detailInfo.memberList) {
+      const member = detailInfo.memberList.find((m) => String(m.userId) === String(targetId))
       if (member) {
         return `@${member.nickname || member.userId}`
       }
     }
 
     // 尝试从全局 profiles 中获取昵称
-    const profile = profiles.find((p: any) => String(p.userId) === String(targetId))
+    const profile = profiles.find((p) => String(p.userId) === String(targetId))
     if (profile) {
       return `@${profile.nickname || profile.userId}`
     }

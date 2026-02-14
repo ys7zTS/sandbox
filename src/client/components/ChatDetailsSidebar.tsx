@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react'
 import { ChevronRight, Plus, Minus } from 'lucide-react'
 import { useChat } from '../ChatContext'
+import { GroupMember, UserInfo, GroupInfo } from '../types'
 
 const cn = (...classes: (string | boolean | undefined)[]) => classes.filter(Boolean).join(' ')
 
@@ -29,10 +30,10 @@ export const ChatDetailsSidebar: React.FC = () => {
   const isMe = currentTarget.type === 'private' && String(me?.userId) === String(currentTarget.id)
   const isPrivate = currentTarget.type === 'private'
   const isGroup = currentTarget.type === 'group'
-  const isOwner = isGroup && String(detailInfo?.ownerId) === String(me?.userId)
+  const isOwner = isGroup && detailInfo?.type === 'group' && String(detailInfo.ownerId) === String(me?.userId)
   const isMember = isGroup && (
-    detailInfo?.memberList?.some((m: any) => String(m.userId) === String(me?.userId)) ||
-    me?.groupList?.some((gid: any) => String(gid) === String(currentTarget.id))
+    (detailInfo?.type === 'group' && detailInfo?.memberList?.some((m: GroupMember) => String(m.userId) === String(me?.userId))) ||
+    me?.groupList?.some((gid: number) => String(gid) === String(currentTarget.id))
   )
 
   const displayId = String(currentTarget.id)
@@ -44,10 +45,10 @@ export const ChatDetailsSidebar: React.FC = () => {
     if ((isMe || isOwner || isMember) && editInfo) {
       // Ensure age is a valid number if in private chat
       let sanitizedInfo = { ...editInfo }
-      if (isPrivate) {
+      if (isPrivate && sanitizedInfo.type === 'private') {
         sanitizedInfo = {
           ...sanitizedInfo,
-          age: parseInt(String(editInfo.age)) || 0
+          age: parseInt(String(sanitizedInfo.age)) || 0
         }
       }
       setEditInfo(sanitizedInfo)
@@ -55,8 +56,8 @@ export const ChatDetailsSidebar: React.FC = () => {
     }
   }
 
-  const members = [...(detailInfo?.memberList || [])].sort((a: any, b: any) => {
-    const priority: any = { owner: 1, admin: 2, member: 3 }
+  const members = (detailInfo?.type === 'group' ? [...(detailInfo.memberList || [])] : []).sort((a, b) => {
+    const priority: Record<string, number> = { owner: 1, admin: 2, member: 3 }
     const aP = priority[a.role] || 4
     const bP = priority[b.role] || 4
     return aP - bP
@@ -91,8 +92,8 @@ export const ChatDetailsSidebar: React.FC = () => {
             <div className='flex items-center gap-2'>
               <h4 className={cn('text-base font-bold truncate', isDark ? 'text-white' : 'text-gray-900')}>
                 {isGroup
-                  ? (detailInfo?.groupName || currentTarget.name)
-                  : (detailInfo?.nickname || String(currentTarget.id))}
+                  ? (detailInfo?.type === 'group' ? detailInfo.groupName : currentTarget.name)
+                  : (detailInfo?.type === 'private' ? detailInfo.nickname : String(currentTarget.id))}
               </h4>
             </div>
             <div className={cn('text-xs opacity-50 font-medium', isDark ? 'text-gray-100' : 'text-gray-900')}>
@@ -112,16 +113,16 @@ export const ChatDetailsSidebar: React.FC = () => {
                   ? (
                     <input
                       type='text'
-                      value={editInfo?.nickname || ''}
+                      value={(editInfo as UserInfo)?.nickname || ''}
                       onBlur={handleBlur}
-                      onChange={(e) => setEditInfo({ ...editInfo, nickname: e.target.value })}
+                      onChange={(e) => setEditInfo({ ...editInfo, nickname: e.target.value } as UserInfo)}
                       className={cn('text-sm font-bold bg-transparent border-b border-transparent focus:border-mac-blue outline-none transition-all',
                         isDark ? 'text-white' : 'text-gray-900')}
                       placeholder='输入昵称'
                     />)
                   : (
                     <span className={cn('text-sm font-bold', isDark ? 'text-white' : 'text-gray-900')}>
-                      {detailInfo?.nickname || '未设置'}
+                      {(detailInfo as UserInfo)?.nickname || '未设置'}
                     </span>)}
               </div>
               <div className='flex flex-col gap-1 text-left'>
@@ -146,12 +147,12 @@ export const ChatDetailsSidebar: React.FC = () => {
                           <button
                             key={opt.val}
                             onClick={() => {
-                              const nextInfo = { ...editInfo, gender: opt.val as any }
+                              const nextInfo = { ...(editInfo as UserInfo), gender: opt.val as any }
                               setEditInfo(nextInfo)
                               handleSave()
                             }}
                             className={cn('flex-1 py-1.5 text-xs font-bold rounded-xl transition-all',
-                              (editInfo?.gender || detailInfo?.gender) === opt.val
+                              ((editInfo as UserInfo)?.gender || (detailInfo as UserInfo)?.gender) === opt.val
                                 ? (isDark ? 'bg-mac-blue text-white shadow-lg shadow-mac-blue/20' : 'bg-mac-blue text-white shadow-md shadow-mac-blue/20')
                                 : (isDark ? 'text-gray-400 hover:text-white hover:bg-white/5' : 'text-gray-500 hover:text-mac-text-main hover:bg-black/5')
                             )}
@@ -162,7 +163,7 @@ export const ChatDetailsSidebar: React.FC = () => {
                       </div>)
                     : (
                       <span className={cn('text-sm font-bold px-1', isDark ? 'text-white' : 'text-gray-900')}>
-                        {detailInfo?.gender === 'male' ? '男' : detailInfo?.gender === 'female' ? '女' : '未知'}
+                        {(detailInfo as UserInfo)?.gender === 'male' ? '男' : (detailInfo as UserInfo)?.gender === 'female' ? '女' : '未知'}
                       </span>)}
                 </div>
                 <div className='flex flex-col gap-1 text-left'>
@@ -171,16 +172,16 @@ export const ChatDetailsSidebar: React.FC = () => {
                     ? (
                       <input
                         type='number'
-                        value={editInfo?.age ?? ''}
+                        value={(editInfo as UserInfo)?.age ?? ''}
                         onBlur={handleBlur}
-                        onChange={(e) => setEditInfo({ ...editInfo, age: e.target.value })}
+                        onChange={(e) => setEditInfo({ ...editInfo, age: parseInt(e.target.value) || 0 } as UserInfo)}
                         className={cn('text-sm font-bold bg-transparent border-b border-transparent focus:border-mac-blue outline-none transition-all w-full',
                           isDark ? 'text-white' : 'text-gray-900')}
                         placeholder='年龄'
                       />)
                     : (
                       <span className={cn('text-sm font-bold', isDark ? 'text-white' : 'text-gray-900')}>
-                        {detailInfo?.age ?? '未知'} 岁
+                        {(detailInfo as UserInfo)?.age ?? '未知'} 岁
                       </span>)}
                 </div>
               </div>
@@ -262,7 +263,7 @@ export const ChatDetailsSidebar: React.FC = () => {
             >
               <div className='flex items-center justify-between'>
                 <div className='flex-1 truncate opacity-70 text-left font-medium leading-relaxed'>
-                  {detailInfo?.announcement || '暂无公告'}
+                  {(detailInfo as GroupInfo)?.announcement || '暂无公告'}
                 </div>
                 <ChevronRight className='w-4 h-4 opacity-30 translate-x-1 group-hover:translate-x-2 transition-transform shrink-0' />
               </div>
@@ -277,9 +278,9 @@ export const ChatDetailsSidebar: React.FC = () => {
               <span className={cn('text-[10px] font-bold opacity-40 uppercase tracking-wider')}>我的本群昵称</span>
               <input
                 type='text'
-                value={editInfo?.card || ''}
+                value={(editInfo as GroupInfo)?.card || ''}
                 onBlur={handleBlur}
-                onChange={(e) => setEditInfo({ ...editInfo, card: e.target.value })}
+                onChange={(e) => setEditInfo({ ...editInfo, card: e.target.value } as GroupInfo)}
                 placeholder='未设置'
                 className={cn('text-sm font-bold w-full bg-transparent border-b border-transparent focus:border-mac-blue outline-none transition-all',
                   isDark ? 'text-white' : 'text-gray-900')}

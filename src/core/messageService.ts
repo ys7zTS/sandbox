@@ -6,7 +6,7 @@ export const messageService = {
   /**
    * 发送并广播消息
    */
-  async sendMessage (msg: Omit<UnifiedMessage, 'seq' | 'timestamp'>) {
+  async sendMessage (msg: Omit<UnifiedMessage, 'seq' | 'timestamp' | 'isRevoked'>) {
     const saved = dbService.saveMsg({
       ...msg,
       timestamp: Math.floor(Date.now() / 1000),
