@@ -13,6 +13,11 @@ export const messageService = {
       isRevoked: 0
     })
 
+    // 如果原始消息带了 tempId，把它带到广播中，但不一定存数据库
+    if (msg.tempId) {
+      (saved as any).tempId = msg.tempId
+    }
+
     // 触发保存成功事件，其它模块（如 WS, OB11 适配器）监听并处理
     eventBus.emit(Events.MESSAGE_SAVED, { message: saved } as MessageSavedEvent)
 

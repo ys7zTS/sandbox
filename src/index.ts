@@ -16,13 +16,39 @@ const wss = new WebSocketServer({ server })
 const port = 3000
 
 // -------------------- Event Bus Listeners --------------------
-// 消息广播监听：处理推送给所有在线客户端
+// 消息广播监听：处理推送给相关在线客户端
 eventBus.on(Events.MESSAGE_SAVED, ({ message }: MessageSavedEvent) => {
-  broadcast({ type: ActionTypes.PUSH_MESSAGE, data: message })
+  if (message.type === 'private') {
+    // 私聊消息：仅发送给发送者和接收者
+    sendToUsers([message.senderId, message.targetId], { type: ActionTypes.PUSH_MESSAGE, data: message })
+  } else {
+    // 群聊消息：发送给群内在线成员
+    const group = dbService.getGroupInfo(message.targetId) as any
+    if (group && group.memberList) {
+      const memberIds = group.memberList.map((m: any) => m.userId)
+      sendToUsers(memberIds, { type: ActionTypes.PUSH_MESSAGE, data: message })
+    }
+  }
 })
 
-eventBus.on(Events.MESSAGE_RECALLED, ({ type, seq }: any) => {
-  broadcast({ type: ActionTypes.RECALL_MESSAGE, data: { type, seq } })
+eventBus.on(Events.MESSAGE_RECALLED, ({ type, seq, message }: any) => {
+  if (type === 'private') {
+    const targetId = message ? (message.senderId === message.targetId ? message.senderId : [message.senderId, message.targetId]) : undefined
+    const users = Array.isArray(targetId) ? targetId : (targetId ? [targetId] : [])
+    sendToUsers(users, {
+      type: ActionTypes.RECALL,
+      data: { type, seq, targetId: message?.senderId }
+    })
+  } else {
+    const group = dbService.getGroupInfo(message.targetId) as any
+    if (group && group.memberList) {
+      const memberIds = group.memberList.map((m: any) => m.userId)
+      sendToUsers(memberIds, {
+        type: ActionTypes.RECALL,
+        data: { type, seq, targetId: message.targetId }
+      })
+    }
+  }
 })
 
 app.use(express.json())
@@ -109,15 +135,17 @@ wss.on('connection', (ws, req) => {
           ws.send(JSON.stringify({ type: ActionTypes.HEARTBEAT, data: 'pong', echo }))
           return
 
-        case ActionTypes.GET_USER_INFO:
-          if (data?.target === 'current') {
+        case ActionTypes.GET_USER_INFO: {
+          const target = data?.target || data?.userId
+          if (target === 'current') {
             result = session.userId
               ? dbService.getUserInfo(session.userId)
-              : { userId: 0, nickname: '访客', age: 0, gender: 'unknown', friendList: [], groupList: [], isCurrent: 0 }
+              : { userId: 0, nickname: '访客', age: 0, gender: 'unknown', friendList: [], groupList: [] }
           } else {
-            result = dbService.getUserInfo(parseTarget(data?.target))
+            result = dbService.getUserInfo(parseTarget(target))
           }
           break
+        }
 
         case ActionTypes.SAVE_USER: {
           const nickname = data.nickname?.trim() || `用户 ${data.userId}`
@@ -125,9 +153,10 @@ wss.on('connection', (ws, req) => {
             ...data,
             nickname,
             userId: Number(data.userId),
-            age: data.age ? Number(data.age) : undefined,
-            isCurrent: 0
+            age: data.age ? Number(data.age) : undefined
           })
+          // 触发所有连接的同步以更新联系人列表
+          broadcastSync()
           result = { status: 'ok' }
           break
         }
@@ -140,14 +169,15 @@ wss.on('connection', (ws, req) => {
           } else {
             session.userId = uid
           }
-          // 触发重新同步
+          // 触发当前连接的同步
           syncClient(ws).catch(() => { })
-          result = { status: 'ok' }
+          result = { status: 'ok', userId: session.userId }
           break
         }
 
         case ActionTypes.REMOVE_USER:
           dbService.removeUser(Number(data.userId), { clearMessages: !!data.clearMessages })
+          broadcastSync()
           result = { status: 'ok' }
           break
 
@@ -163,9 +193,11 @@ wss.on('connection', (ws, req) => {
           break
         }
 
-        case ActionTypes.GET_GROUP_INFO:
-          result = dbService.getGroupInfo(parseTarget(data?.target))
+        case ActionTypes.GET_GROUP_INFO: {
+          const target = data?.target || data?.groupId
+          result = dbService.getGroupInfo(parseTarget(target))
           break
+        }
 
         case ActionTypes.SAVE_GROUP: {
           const groupName = data.groupName?.trim() || `群聊 ${data.groupId}`
@@ -194,12 +226,15 @@ wss.on('connection', (ws, req) => {
             }
           }
 
+          // 触发全端同步
+          broadcastSync()
           result = { status: 'ok' }
           break
         }
 
         case ActionTypes.REMOVE_GROUP:
           dbService.removeGroup(Number(data.groupId), { clearMessages: !!data.clearMessages })
+          broadcastSync()
           result = { status: 'ok' }
           break
 
@@ -223,9 +258,13 @@ wss.on('connection', (ws, req) => {
               timestamp: Math.floor(Date.now() / 1000),
               isRevoked: 0
             })
-            broadcast({ type: ActionTypes.PUSH_MESSAGE, data: sysMsg })
-            // 推送群成员更新事件
-            broadcast({ type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: Number(data.groupId) } })
+            // 推送给群成员
+            const group = dbService.getGroupInfo(Number(data.groupId)) as any
+            if (group && group.memberList) {
+              const ids = group.memberList.map((m: any) => m.userId)
+              sendToUsers(ids, { type: ActionTypes.PUSH_MESSAGE, data: sysMsg })
+              sendToUsers(ids, { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: Number(data.groupId) } })
+            }
           }
           result = { status: 'ok' }
           break
@@ -242,54 +281,73 @@ wss.on('connection', (ws, req) => {
             dbService.removeGroupMember(gid, uid)
           }
           // 推送群成员更新事件
-          broadcast({ type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
+          if (group && group.memberList) {
+            sendToUsers(group.memberList.map((m: any) => m.userId), { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
+          }
           result = { status: 'ok' }
           break
         }
 
-        case ActionTypes.SET_GROUP_ADMIN:
-          dbService.updateGroupMemberRole(Number(data.groupId), Number(data.userId), data.isAdmin ? 'admin' : 'member')
-          broadcast({ type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: Number(data.groupId) } })
+        case ActionTypes.SET_GROUP_ADMIN: {
+          const gid = Number(data.groupId)
+          dbService.updateGroupMemberRole(gid, Number(data.userId), data.isAdmin ? 'admin' : 'member')
+          const group = dbService.getGroupInfo(gid) as any
+          if (group && group.memberList) {
+            sendToUsers(group.memberList.map((m: any) => m.userId), { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
+          }
           result = { status: 'ok' }
           break
+        }
 
         case ActionTypes.UPDATE_GROUP_MEMBER: {
-          const oldMember = (dbService.getGroupInfo(Number(data.groupId)) as any)?.memberList?.find((m: any) => m.userId === Number(data.userId))
-          dbService.updateGroupMemberInfo(Number(data.groupId), Number(data.userId), data)
-          // 如果头衔发生变化，发送系统消息
-          if (data.title !== undefined && data.title !== oldMember?.title) {
-            if (data.title) {
-              const titleMsg = dbService.saveMsg({
-                type: 'group',
-                senderId: 1,
-                targetId: Number(data.groupId),
-                content: `@${data.userId} 获得群主授予的头衔「${data.title}」`,
-                timestamp: Math.floor(Date.now() / 1000),
-                isRevoked: 0
-              })
-              broadcast({ type: ActionTypes.PUSH_MESSAGE, data: titleMsg })
+          const gid = Number(data.groupId)
+          const group = dbService.getGroupInfo(gid) as any
+          const oldMember = group?.memberList?.find((m: any) => m.userId === Number(data.userId))
+          dbService.updateGroupMemberInfo(gid, Number(data.userId), data)
+
+          if (group && group.memberList) {
+            const ids = group.memberList.map((m: any) => m.userId)
+            // 如果头衔发生变化，发送系统消息
+            if (data.title !== undefined && data.title !== oldMember?.title) {
+              if (data.title) {
+                const titleMsg = dbService.saveMsg({
+                  type: 'group',
+                  senderId: 1,
+                  targetId: gid,
+                  content: `@${data.userId} 获得群主授予的头衔「${data.title}」`,
+                  timestamp: Math.floor(Date.now() / 1000),
+                  isRevoked: 0
+                })
+                sendToUsers(ids, { type: ActionTypes.PUSH_MESSAGE, data: titleMsg })
+              }
             }
+            sendToUsers(ids, { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
           }
-          broadcast({ type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: Number(data.groupId) } })
           result = { status: 'ok' }
           break
         }
 
-        case ActionTypes.TRANSFER_GROUP_OWNER:
-          dbService.transferGroupOwner(Number(data.groupId), Number(data.userId))
-          // 发送系统消息
-          const transferMsg = dbService.saveMsg({
-            type: 'group',
-            senderId: 1,
-            targetId: Number(data.groupId),
-            content: `群主已转让给 @${data.userId}`,
-            timestamp: Math.floor(Date.now() / 1000),
-            isRevoked: 0
-          })
-          broadcast({ type: ActionTypes.PUSH_MESSAGE, data: transferMsg })
-          broadcast({ type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: Number(data.groupId) } })
+        case ActionTypes.TRANSFER_GROUP_OWNER: {
+          const gid = Number(data.groupId)
+          dbService.transferGroupOwner(gid, Number(data.userId))
+          const group = dbService.getGroupInfo(gid) as any
+          if (group && group.memberList) {
+            const ids = group.memberList.map((m: any) => m.userId)
+            // 发送系统消息
+            const transferMsg = dbService.saveMsg({
+              type: 'group',
+              senderId: 1,
+              targetId: gid,
+              content: `群主已转让给 @${data.userId}`,
+              timestamp: Math.floor(Date.now() / 1000),
+              isRevoked: 0
+            })
+            sendToUsers(ids, { type: ActionTypes.PUSH_MESSAGE, data: transferMsg })
+            sendToUsers(ids, { type: ActionTypes.GROUP_MEMBER_UPDATE, data: { groupId: gid } })
+          }
           result = { status: 'ok' }
           break
+        }
 
         case ActionTypes.GET_MESSAGES: {
           const session = clients.get(ws)!
@@ -314,10 +372,11 @@ wss.on('connection', (ws, req) => {
             type: sendPayload.type,
             senderId: Number(senderId),
             targetId: Number(sendPayload.targetId),
-            content: sendPayload.content
+            content: sendPayload.content,
+            tempId: data.tempId // 传递 tempId 以便前端去重
           })
 
-          result = { seq: saved.seq, timestamp: saved.timestamp }
+          result = { seq: saved.seq, timestamp: saved.timestamp, tempId: saved.tempId }
           break
         }
 
@@ -332,7 +391,7 @@ wss.on('connection', (ws, req) => {
         }
 
         case ActionTypes.RECALL_MESSAGE:
-          dbService.recallMsg(data.type, Number(data.seq))
+          await messageService.recallMessage(data.type, Number(data.seq))
           result = { status: 'ok' }
           break
 
@@ -373,20 +432,44 @@ function broadcast (msg: WSMessage) {
   })
 }
 
+/**
+ * 广播同步事件给所有客户端
+ */
+function broadcastSync () {
+  clients.forEach((_, ws) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      syncClient(ws).catch(() => { })
+    }
+  })
+}
+
+/**
+ * 推送消息给指定的用户列表（如果在线）
+ */
+function sendToUsers (userIds: number[], msg: WSMessage) {
+  const payload = JSON.stringify(msg)
+  const idSet = new Set(userIds)
+  clients.forEach((session, client) => {
+    if (client.readyState === WebSocket.OPEN && session.userId && idSet.has(session.userId)) {
+      client.send(payload)
+    }
+  })
+}
+
 async function syncClient (ws: WebSocket) {
   const session = clients.get(ws)
   let me = (session?.userId ? dbService.getUserInfo(session.userId) : null) as any
 
   if (!me) {
     if (session) session.userId = 0
-    me = { userId: 0, nickname: '访客', age: 0, gender: 'unknown', friendList: [], groupList: [], isCurrent: 0 }
+    me = { userId: 0, nickname: '访客', age: 0, gender: 'unknown', friendList: [], groupList: [] }
   }
 
   const friends = dbService.getUserInfo('all') as any[]
   const groups = dbService.getGroupInfo('all') as any[]
 
   const contacts = [
-    ...friends.filter(f => f.userId !== me.userId).map(f => ({ ...f, type: 'private' })),
+    ...friends.map(f => ({ ...f, type: 'private' })),
     ...groups.map(g => ({ ...g, type: 'group' }))
   ]
 

@@ -21,8 +21,7 @@ db.exec(`
     age INTEGER DEFAULT 0,
     gender TEXT DEFAULT 'unknown',
     friendList TEXT DEFAULT '[]',
-    groupList TEXT DEFAULT '[]',
-    isCurrent INTEGER DEFAULT 0
+    groupList TEXT DEFAULT '[]'
   );
 
   CREATE TABLE IF NOT EXISTS groups (
@@ -85,7 +84,6 @@ type UserRow = {
   gender: string
   friendList: string
   groupList: string
-  isCurrent: number
 }
 
 type GroupRow = {
@@ -120,40 +118,29 @@ export const dbService = {
       return rows.map(mapUserRow)
     }
 
-    const row = (target === 'current'
-      ? db.prepare('SELECT * FROM users WHERE isCurrent = 1').get()
-      : db.prepare('SELECT * FROM users WHERE userId = ?').get(target)) as UserRow | undefined
+    const row = db.prepare('SELECT * FROM users WHERE userId = ?').get(target) as UserRow | undefined
 
     if (!row) return undefined
     return mapUserRow(row)
   },
 
-  setActiveUser: (userId: number) => {
-    db.transaction(() => {
-      db.prepare('UPDATE users SET isCurrent = 0').run()
-      db.prepare('UPDATE users SET isCurrent = 1 WHERE userId = ?').run(userId)
-    })()
-  },
-
-  saveUser: (user: Partial<UnifiedUser> & { userId: number; isCurrent?: boolean | number }) => {
+  saveUser: (user: Partial<UnifiedUser> & { userId: number }) => {
     db.prepare(`
-      INSERT INTO users (userId, nickname, age, gender, friendList, groupList, isCurrent)
-      VALUES (:userId, :nickname, :age, :gender, :friendList, :groupList, :isCurrent)
+      INSERT INTO users (userId, nickname, age, gender, friendList, groupList)
+      VALUES (:userId, :nickname, :age, :gender, :friendList, :groupList)
       ON CONFLICT(userId) DO UPDATE SET
         nickname = excluded.nickname,
         age = excluded.age,
         gender = excluded.gender,
         friendList = excluded.friendList,
-        groupList = excluded.groupList,
-        isCurrent = CASE WHEN excluded.isCurrent = 1 THEN 1 ELSE users.isCurrent END;
+        groupList = excluded.groupList;
     `).run({
       userId: user.userId,
       nickname: user.nickname ?? '',
       age: user.age ?? 0,
       gender: user.gender ?? 'unknown',
       friendList: JSON.stringify(user.friendList ?? []),
-      groupList: JSON.stringify(user.groupList ?? []),
-      isCurrent: user.isCurrent ? 1 : 0
+      groupList: JSON.stringify(user.groupList ?? [])
     })
   },
 
@@ -381,9 +368,19 @@ export const dbService = {
 
   recallMsg: (type: 'private' | 'group', seq: number) => {
     const table = type === 'private' ? 'private_messages' : 'group_messages'
+    const msg = db.prepare(`SELECT * FROM ${table} WHERE seq = ?`).get(seq) as any
+    if (!msg) return
+
     db.prepare(`UPDATE ${table} SET isRevoked = 1 WHERE seq = ?`).run(seq)
-    // 这里的 type 修正为具体的类型和 seq
-    eventBus.emit(Events.MESSAGE_RECALLED, { type, seq })
+
+    // 将消息详情也传给事件总线，方便 index.ts 决定广播范围
+    eventBus.emit(Events.MESSAGE_RECALLED, {
+      type,
+      seq,
+      message: type === 'private'
+        ? { senderId: msg.senderId, targetId: msg.receiverId }
+        : { targetId: msg.groupId }
+    })
   },
 
   clearPrivateConversation: (userAId: number, userBId: number) => {

@@ -3,8 +3,9 @@ import { MessageType } from '@/types/Message'
 export { MessageType }
 
 export type ChatScene = 'private' | 'group'
+export type MessageStatus = 'sending' | 'success' | 'failed'
 
-/** 联系人 */
+/** 场景信息 */
 export interface ContactType {
   /** 私聊/群聊 */
   scene: ChatScene,
@@ -63,7 +64,9 @@ export interface UnifiedMessage {
   content: MessageType
   timestamp: number
   isRevoked: 0 | 1
-  raw?: any
+  status?: MessageStatus
+  tempId?: string
+  raw?: unknown
 }
 
 export interface UnifiedUser {
@@ -103,8 +106,8 @@ export interface UnifiedGroup {
 }
 
 export abstract class ProtocolTransformer {
-  abstract toUnified (raw: any): UnifiedMessage
-  abstract fromUnified (unified: UnifiedMessage): any
+  abstract toUnified (raw: unknown): UnifiedMessage
+  abstract fromUnified (unified: UnifiedMessage): unknown
 }
 
 export interface SendMsgPayload {

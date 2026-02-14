@@ -3,10 +3,11 @@ import { ActionTypes, WSMessage } from '../core/protocol'
 class WebSocketAPI {
   private ws: WebSocket | null = null
   private url: string
-  private echoMap = new Map<string, { resolve: Function, reject: Function }>()
-  private handlers = new Map<string, Set<Function>>()
+  private echoMap = new Map<string, { resolve: (value: any) => void, reject: (reason?: any) => void }>()
+  private handlers = new Map<string, Set<(data: any) => void>>()
   private onConnectHandlers = new Set<() => void>()
-  private heartbeatInterval: any
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null
+  private timeoutTimer: ReturnType<typeof setTimeout> | null = null
   private lastMessageTime: number = 0
   private connectPromise: Promise<void> | null = null
 
@@ -38,15 +39,23 @@ class WebSocketAPI {
       this.ws.onopen = () => {
         console.log(`[WS] Connected to ${this.url}`)
         this.lastMessageTime = Date.now()
-        this.startHeartbeat()
+        this.resetHeartbeat()
         this.onConnectHandlers.forEach(h => h())
         resolve()
       }
 
       this.ws.onmessage = (event) => {
         this.lastMessageTime = Date.now()
+        // 收到任何消息，如果正在等待心跳恢复，则清除超时定时器并重置心跳
+        if (this.timeoutTimer) {
+          clearTimeout(this.timeoutTimer)
+          this.timeoutTimer = null
+          this.resetHeartbeat()
+        }
+
         try {
-          const { type, data, echo } = JSON.parse(event.data) as WSMessage
+          const raw = JSON.parse(event.data) as WSMessage<any>
+          const { type, data, echo } = raw
 
           if (echo && this.echoMap.has(echo)) {
             const { resolve } = this.echoMap.get(echo)!
@@ -54,8 +63,14 @@ class WebSocketAPI {
             resolve(data)
           }
 
-          if (this.handlers.has(type)) {
-            this.handlers.get(type)!.forEach(handler => handler(data))
+          // 处理核心事件/系统消息
+          if (type === 'Event' && data?.event) {
+            this.emit(data.event, data.payload)
+          } else if (type === 'System') {
+            this.emit('System', data)
+          } else {
+            // 兼容旧的或者直接以 type 为事件名的逻辑
+            this.emit(type, data)
           }
         } catch (err) {
           console.error('[WS] Parse error', err)
@@ -79,26 +94,37 @@ class WebSocketAPI {
     return this.connectPromise
   }
 
-  private startHeartbeat () {
-    this.stopHeartbeat() // 确保旧的被清理
-    this.heartbeatInterval = setInterval(() => {
-      // 检查接收超时
-      if (Date.now() - this.lastMessageTime > 30000) {
-        console.warn('[WS] Heartbeat timeout (30s), closing connection...')
-        this.ws?.close()
-        return
-      }
-      // 添加心跳发送日志（开发调试用）
-      // console.debug('[WS] Sending heartbeat...')
-      this.send(ActionTypes.HEARTBEAT, {}).catch(() => { })
+  private emit (type: string, data: any) {
+    if (this.handlers.has(type)) {
+      this.handlers.get(type)!.forEach(handler => handler(data))
+    }
+  }
+
+  private resetHeartbeat () {
+    this.stopHeartbeat()
+    this.heartbeatTimer = setTimeout(() => {
+      this.sendHeartbeat()
+    }, 30000)
+  }
+
+  private sendHeartbeat () {
+    this.send(ActionTypes.HEARTBEAT as any, {}).catch(() => { })
+
+    // 发送心跳后启动 5s 超时检测
+    this.timeoutTimer = setTimeout(() => {
+      console.warn('[WS] Heartbeat timeout (5s), closing connection...')
+      this.ws?.close()
     }, 5000)
   }
 
   private stopHeartbeat () {
-    clearInterval(this.heartbeatInterval)
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer)
+    if (this.timeoutTimer) clearTimeout(this.timeoutTimer)
+    this.heartbeatTimer = null
+    this.timeoutTimer = null
   }
 
-  on (type: string, handler: Function) {
+  on (type: string, handler: (data: any) => void) {
     if (!this.handlers.has(type)) {
       this.handlers.set(type, new Set())
     }

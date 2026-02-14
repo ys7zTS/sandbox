@@ -1,13 +1,18 @@
 import { MessageType } from '../types/Message'
+import { MessageStatus, ChatScene } from '../core/types'
+
+export { MessageStatus, ChatScene }
 
 export interface Message {
-  seq: number
+  seq?: number
   type: 'private' | 'group'
   senderId: number
   targetId: number
   content: MessageType
   timestamp: number
   isRevoked: 0 | 1
+  status?: MessageStatus
+  tempId?: string
 }
 
 export type UploadedPart = {
